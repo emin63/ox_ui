@@ -1,0 +1,53 @@
+<div class="w3-container w3-teal">
+  <h2>
+    {{ title }}
+  </h2>
+</div>
+
+<div class="w3-container w3-row-padding">
+  {% if intro %}
+  <div class="w3-third">      
+    {{ intro }}
+  </div>
+  {% endif %}
+  <div class="w3-third w3-container w3-light-grey">      
+      {% if message %}
+      <div class="w3-text-pink w3-padding-bottom">      
+        {{ message }}
+      </div>
+      {% endif %}
+    <form action="" method="post" name="title"
+	  enctype=multipart/form-data>
+      {% for field in form %}
+      {% if field.type in ['CSRFTokenField', 'HiddenField'] %}
+      {{ field() }}
+      {% else %}
+      <div class="form-group {% if field.errors %}error{% endif %}">
+	<div class="tooltip">	
+	  {{ field.label }}
+	  <span class="tooltiptext"> {{ field.description }} </span>
+	</div>
+	<div class="input w3-padding-bottom">
+	  {% if field.name == "body" %}
+          {{ field(rows=10, cols=40) }}
+	  {% else %}
+	  {{ field(style="width:90%") }}
+	  {% endif %}
+	  {% if field.errors or field.help_text %}
+          <span class="help-inline {% if field.errors %}error{% endif %}">
+            {% if field.errors %}
+	    <br>
+            {{ field.errors|join(' ') }}
+            {% else %}
+            {{ field.help_text }}
+            {% endif %}
+          </span>
+	  {% endif %}
+	</div>
+      </div>
+      {% endif %}
+      {% endfor %}
+      <input type="submit" value="Go">
+    </form>
+  </div>
+</div>
