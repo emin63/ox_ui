@@ -107,13 +107,13 @@ class ClickToWTF:
     def click_opt_to_wtf_field(self, opt):
         if opt.type == types.INT:
             field = IntegerField(opt.name, validators=[], description=str(
-                opt.help))
+                opt.help), default=opt.default)
         elif opt.type == types.STRING:
             field = StringField(opt.name, validators=[], description=str(
-                opt.help))
+                opt.help), default=opt.default)
         elif isinstance(opt.type, click_datetime.Datetime):
             field = DateTimeField(opt.name, validators=[], description=str(
-                opt.help))
+                opt.help), default=opt.default)
         else:
             raise TypeError('Cannot represent click type %s in WTF' % (
                 opt.type))
