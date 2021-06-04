@@ -167,10 +167,10 @@ class ClickToWTF:
                   if opt.name not in self.gobbled_opts}
         self.pad_kwargs(kwargs)
         wrapped_cmd = getattr(self.clickCmd.callback, '__wrapped__', None)
-        if not wrapped_cmd:
-            raise ValueError('Could not find wrapped function for %s.%s' % (
-                str(self.clickCmd), str(self.clickCmd.callback)))
-        raw_result = wrapped_cmd(**kwargs)
+        if wrapped_cmd:
+            raw_result = wrapped_cmd(**kwargs)
+        else:
+            raw_result = self.clickCmd.callback(**kwargs)
         result = raw_result
         for tweak in self.tweaks:
             result = tweak.post_process_result(self, result)
