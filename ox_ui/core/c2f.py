@@ -14,7 +14,7 @@ from flask_wtf import FlaskForm
 from jinja2 import Environment, BaseLoader
 
 from click import types
-import click_datetime
+
 
 from wtforms import widgets
 from wtforms import BooleanField, StringField, IntegerField, Field
@@ -141,7 +141,7 @@ class ClickToWTF:
         elif opt.type == types.STRING:
             field = StringField(opt.name, validators=[], description=str(
                 opt.help), default=opt.default)
-        elif isinstance(opt.type, click_datetime.Datetime) or (
+        elif isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
             kwargs = {}
             if hasattr(opt, 'foramts'):

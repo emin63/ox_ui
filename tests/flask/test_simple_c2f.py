@@ -32,12 +32,24 @@ class BasicC2FTest(unittest.TestCase):
 
     def test_good_c2f(self):
         url = 'http://127.0.0.1:%s/hello' % (self.server_info.s_port)
+        count, text = 3, 'bye'
+        self.check_good_c2f(url, count, text)
+        
+        count, text = 2, 'why'
+        url = 'http://127.0.0.1:%s/goodbye' % (self.server_info.s_port)
+        self.check_good_c2f(
+            url, count, text, when='2021-01-23',
+            more='\n\nat 2021-01-23 00:00:00')
+
+    def check_good_c2f(self, url, count, text, more='', **extras):
+
+        data = {'count': count, 'text': text}
+        data.update(extras)        
         get_req = requests.get(url)
         self.assertEqual(get_req.status_code, 200)
-        count, text = 3, 'bye'
-        post_req = requests.post(url, data={'count': count, 'text': text})
+        post_req = requests.post(url, data=data)
         self.assertEqual(post_req.status_code, 200)
-        self.assertEqual(post_req.text, '\n'.join([text]*count))
+        self.assertEqual(post_req.text, '\n'.join([text]*count) + more)
 
     def test_bad_c2f(self):
         url = 'http://127.0.0.1:%s/hello' % (self.server_info.s_port)

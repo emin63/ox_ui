@@ -1,6 +1,8 @@
 """Module to run minimal flask app to be used for tests.
 """
 
+import datetime
+
 import click
 from flask import Flask, url_for
 
@@ -22,6 +24,22 @@ def hello_cmd(count, text):
     return '\n'.join(result)
 
 
+@click.command()
+@click.option('--count', default=2, type=int, help='how many times to say it')
+@click.option('--when', type=click.DateTime(formats=[
+    '%Y-%m-%d', '%m/%d/%Y']), default=datetime.date.today)
+@click.option('--text', default='bye', type=str, help='what to say')
+def goodbye_cmd(count, text, when):
+    'say bye'
+
+    result = []
+    for i in range(count):
+        result.append(text)
+    result.append('\nat %s' % str(when))
+
+    return '\n'.join(result)
+
+
 @APP.route('/')
 def home():
     url = url_for('hello')
@@ -34,3 +52,8 @@ def hello():
     fcmd = c2f.ClickToWTF(hello_cmd)
     result = fcmd.handle_request()
     return result
+
+
+@APP.route('/goodbye', methods=('GET', 'POST'))
+def goodbye():
+    return c2f.ClickToWTF(goodbye_cmd).handle_request()
