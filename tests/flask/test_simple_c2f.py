@@ -38,8 +38,8 @@ class BasicC2FTest(unittest.TestCase):
         count, text = 2, 'why'
         url = 'http://127.0.0.1:%s/goodbye' % (self.server_info.s_port)
         self.check_good_c2f(
-            url, count, text, when='2021-01-23',
-            more='\n\nat 2021-01-23 00:00:00')
+            url, count, text, when='2021-01-23', also='blah',
+            more='\nblah\n\nat 2021-01-23 00:00:00')
 
     def check_good_c2f(self, url, count, text, more='', **extras):
 

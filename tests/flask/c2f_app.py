@@ -29,12 +29,16 @@ def hello_cmd(count, text):
 @click.option('--when', type=click.DateTime(formats=[
     '%Y-%m-%d', '%m/%d/%Y']), default=datetime.date.today)
 @click.option('--text', default='bye', type=str, help='what to say')
-def goodbye_cmd(count, text, when):
+@click.option('--also', multiple=True, default=['them'], type=str,
+              help='Also say...; can be provided multiple times.')
+def goodbye_cmd(count, text, when, also):
     'say bye'
 
     result = []
     for i in range(count):
         result.append(text)
+    if also:
+        result.extend(also)
     result.append('\nat %s' % str(when))
 
     return '\n'.join(result)

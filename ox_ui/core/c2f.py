@@ -162,9 +162,19 @@ class ClickToWTF:
         return field
 
     def process(self, form):
-        kwargs = {opt.name: getattr(form, opt.name).data
-                  for opt in self.clickCmd.params
-                  if opt.name not in self.gobbled_opts}
+        kwargs = {}
+        for opt in self.clickCmd.params:
+            if opt.name in self.gobbled_opts:
+                continue
+            value = getattr(form, opt.name).data
+            if opt.multiple:
+                cur = kwargs.get(opt.name, [])
+                if not cur:
+                    kwargs[opt.name] = cur
+                cur.append(value)
+            else:
+                kwargs[opt.name] = value
+
         self.pad_kwargs(kwargs)
         wrapped_cmd = getattr(self.clickCmd.callback, '__wrapped__', None)
         if wrapped_cmd:
