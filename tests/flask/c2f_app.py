@@ -44,6 +44,16 @@ def goodbye_cmd(count, text, when, also):
     return '\n'.join(result)
 
 
+@click.command()
+@click.option('--datafile', type=click.File('rb'), help=(
+    'Data file to read.'))
+def count_file_size_cmd(datafile):
+    "Count size of file."
+
+    result = len(datafile.read())
+    return str(result)
+
+
 @APP.route('/')
 def home():
     url = url_for('hello')
@@ -61,3 +71,8 @@ def hello():
 @APP.route('/goodbye', methods=('GET', 'POST'))
 def goodbye():
     return c2f.ClickToWTF(goodbye_cmd).handle_request()
+
+
+@APP.route('/count_file_size', methods=('GET', 'POST'))
+def count_file_size():
+    return c2f.ClickToWTF(count_file_size_cmd).handle_request()

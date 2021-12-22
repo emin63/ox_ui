@@ -2,6 +2,7 @@
 import os
 import pathlib
 import unittest
+import tempfile
 
 import requests
 
@@ -29,6 +30,18 @@ class BasicC2FTest(unittest.TestCase):
             s_proc.kill()
             s_proc.wait(timeout=10)
             cls.server_info.s_proc = None
+
+    def test_count_file_size(self):
+        url = 'http://127.0.0.1:%s/count_file_size' % (self.server_info.s_port)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            datafile = tmpdir + '/data.txt'
+            data = 'example\n'
+            with open(datafile, 'w') as fdesc:
+                fdesc.write(data)
+            with open(datafile, 'r') as fdesc:
+                req = requests.post(url, files=[('datafile', fdesc)])
+                self.assertEqual(req.status_code, 200)
+                self.assertEqual(req.text, str(len(data)))
 
     def test_good_c2f(self):
         url = 'http://127.0.0.1:%s/hello' % (self.server_info.s_port)

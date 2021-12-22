@@ -17,7 +17,7 @@ from click import types
 
 
 from wtforms import widgets
-from wtforms import BooleanField, StringField, IntegerField, Field
+from wtforms import BooleanField, StringField, IntegerField, FileField, Field
 
 from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
@@ -156,6 +156,10 @@ class ClickToWTF:
             field = DateTimeFieldTweak(
                 opt.name, validators=[], description=str(opt.help),
                 default=default, **kwargs)
+        elif isinstance(opt.type, types.File):
+            if opt.type.mode in ('r', 'rb'):  # file to read
+                field = FileField(opt.name, validators=[], description=str(
+                    opt.help))
         else:
             raise TypeError('Cannot represent click type %s in WTF' % (
                 opt.type))
