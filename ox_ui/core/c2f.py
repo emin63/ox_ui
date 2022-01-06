@@ -1,6 +1,7 @@
 """Tools to convert click commands to flask WTForms
 """
 
+import typing
 import datetime
 import tempfile
 import re
@@ -194,10 +195,30 @@ class ClickToWTF:
     def post_process_result(self, raw_result):
         return raw_result
 
+    def get_form_data(self) -> typing.Dict[str, typing.Any]:
+        """Return dictionary of form data for show_form method.
+
+This method returns a dictionary with string keys that will be used by
+the `show_form` method in rendering the form for the command.
+
+The following are provided by default:
+
+  - intro:  Text from the `help` variable of the command.
+
+A standard pattern is to override this via something like
+
+        def get_form_data(self):
+            data = super().get_form_data()
+            data['my_custom_data'] = SOMETHING
+            return data
+
+        """
+        return {'intro': self.clickCmd.help}
+        
     def show_form(self, form=None, template=None):
         if form is None:
             form = self.form()
-        data = {'intro': self.clickCmd.help}
+        data = self.get_form_data()
         if template:
             result = render_template(template, form=form, **data)
         else:
