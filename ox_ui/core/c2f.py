@@ -48,7 +48,8 @@ class FileResponseTweak:
         logging.debug('Tweak %s ignores previous result of %s', self.name(),
                       result)
         response = None
-        with open(self.file_name) as my_fd:
+        # Use binary mode below to get consistent behaviour across platforms
+        with open(self.file_name, 'rb') as my_fd:
             suffix = self.mktemp_kwargs.get('suffix', None)
             if suffix and self.split_char and self.split_char in suffix:
                 fname = self.file_name.split(self.split_char)[-1]
