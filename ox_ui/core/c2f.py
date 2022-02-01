@@ -9,7 +9,7 @@ import logging
 import pathlib
 import os
 
-from flask import render_template, make_response
+from flask import render_template, make_response, request
 from flask_wtf import FlaskForm
 
 from jinja2 import Environment, BaseLoader
@@ -95,12 +95,27 @@ class DateTimeFieldTweak(Field):
 
 class ClickToWTF:
 
-    def __init__(self, clickCmd, skip_opt_re=None, tweaks: list = None):
+    def __init__(self, clickCmd, skip_opt_re=None, tweaks: list = None,
+                 fill_get_from_url: bool = False):
+        """Initializer.
+        
+        :param clickCmd:   A click command to turn into a form.
+        
+        :param skip_opt_re=None:  Regexp for options to skip in form.
+        
+        :param tweaks:  List of 'tweaks' to add (e.g., FileResponseTweak).
+        
+        :param fill_get_from_url:  If True, then when doing a GET request
+                                   to fill out arguments we look in the
+                                   URL params to override standard defaults.
+        
+        """
         self.clickCmd = clickCmd
         self.rawTemplate = None
         self.skip_opt_re = skip_opt_re if not skip_opt_re else re.compile(
             skip_opt_re)
         self.tweaks = tweaks if tweaks else []
+        self.fill_get_from_url = fill_get_from_url
         self.gobbled_opts = {}
 
     def form_cls(self):
@@ -118,7 +133,36 @@ class ClickToWTF:
                 field = self.click_opt_to_wtf_field(opt)
                 setattr(ClickForm, opt.name, field)
 
+        if request.method == 'GET' and self.fill_get_from_url:
+            self.populate_form_from_url(ClickForm)
+            
         return ClickForm
+
+    def populate_form_from_url(self, ClickForm):
+        """Populate a form from URL parameters.
+
+        :param ClickForm:  Class form click form as produced by `form_cls`.
+
+        ~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-~-
+
+        PURPOSE:  Go through parameters for command and try to get default
+                  values from URL parameters and put them into `ClickForm`.
+                  This is useful for dynamically sending users to a command
+                  with special default values.
+
+                  This is mainly intended to be called from form_cls
+                  only if self.fill_get_from_url is True because it is
+                  a minor security risk. A malicious actor could send
+                  the user to the form with malicious defaults so we only
+                  do this if fill_get_from_url is set to True or if this is
+                  explicitly called by a "safe" command.
+        """
+        logging.debug('Populating form %s from URL', ClickForm)
+        for opt in self.clickCmd.params:
+            url_value = request.args.get(opt.name, None)
+            if url_value is not None:
+                field = getattr(ClickForm, opt.name)
+                field.kwargs['default'] = url_value
 
     def gobble(self, name):
         for tweak in self.tweaks:
