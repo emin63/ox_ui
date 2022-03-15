@@ -8,13 +8,15 @@ import re
 import logging
 import pathlib
 import os
+from io import BytesIO, StringIO
+from contextlib import contextmanager
 
 from flask import render_template, make_response, request
 from flask_wtf import FlaskForm
 
 from jinja2 import Environment, BaseLoader
 
-from click import types
+from click import types, utils
 
 
 from wtforms import widgets
@@ -24,13 +26,28 @@ from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
 
 
+@contextmanager
+def ensure_open(
+        filelike: typing.Union[str, utils.LazyFile, BytesIO, StringIO],
+        *args, **kwargs):
+    opened = None
+    try:
+        if isinstance(filelike, str):
+            opened = open(filelike, *args, **kwargs)
+        elif isinstance(filelike, utils.LazyFile):
+            opened = filelike.open()
+        yield opened or filelike
+    finally:
+        if opened:
+            opened.close()
+
+
 class FileResponseTweak:
 
-    def __init__(self, arg_name, split_char='_', **mktemp_kwargs):
+    def __init__(self, arg_name, mode):
         self.arg_name = arg_name
-        self.split_char = split_char
-        self.mktemp_kwargs = dict(mktemp_kwargs)
-        self.file_name = None
+        self.mode = mode
+        self.buffer = None
 
     def gobble(self, cmd, name):
         dummy = cmd
@@ -38,8 +55,8 @@ class FileResponseTweak:
 
     def pad_kwargs(self, cmd, kwargs):
         dummy = cmd
-        self.file_name = tempfile.mktemp(**self.mktemp_kwargs)
-        kwargs[self.arg_name] = self.file_name
+        self.buffer = BytesIO() if 'b' in self.mode else StringIO()
+        kwargs[self.arg_name] = self.buffer
 
     def name(self):
         return self.__class__.__name__
@@ -47,22 +64,17 @@ class FileResponseTweak:
     def post_process_result(self, cmd, result):
         logging.debug('Tweak %s ignores previous result of %s', self.name(),
                       result)
-        response = None
-        # Use binary mode below to get consistent behaviour across platforms
-        with open(self.file_name, 'rb') as my_fd:
-            suffix = self.mktemp_kwargs.get('suffix', None)
-            if suffix and self.split_char and self.split_char in suffix:
-                fname = self.file_name.split(self.split_char)[-1]
-            else:
-                fname = self.file_name
-            response = make_response(my_fd.read())
-            response.headers.set('Content-Type', 'application/octest-stream')
-            response.headers.set(
-                'Content-Disposition', 'attachment', filename=fname)
 
-        if os.path.exists(self.file_name):
-            logging.info('Removing temporary file %s', self.file_name)
-            os.remove(self.file_name)
+        try:
+            bytes_ = self.buffer.getvalue()
+            if isinstance(bytes_, str):
+                bytes_ = bytes_.encode('utf-8')
+        finally:
+            self.buffer.close()
+        response = make_response(bytes_)
+        response.headers.set('Content-Type', 'application/octest-stream')
+        response.headers.set(
+            'Content-Disposition', 'attachment', filename=self.arg_name)
         return response
 
 
