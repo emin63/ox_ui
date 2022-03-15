@@ -30,6 +30,22 @@ from ox_ui.assets import css
 def ensure_open(
         filelike: typing.Union[str, utils.LazyFile, BytesIO, StringIO],
         *args, **kwargs):
+    """
+    ensure `filelike` is opened and ready for read or write.
+
+    `filelike` could be a str showing a file path,
+    or an instance of click.File, or BytesIO and StringIO in case the
+    field is gobbled.
+
+    For the first two cases, we will open `filelike`,
+    the mode will be specified in `*args` and `**kwargs`
+    if `filelike` is a str, or implied inside `filelike` if it is a click.File.
+
+    No need to open BytesIO or StringIO.
+    We must NOT close BytesIO or StringIO and leave it to client code to close
+    after `getvalue`. Otherwise, their content will be discarded right after
+    close.
+    """
     opened = None
     try:
         if isinstance(filelike, str):
