@@ -1,6 +1,5 @@
 """Tools to convert click commands to flask WTForms
 """
-
 import typing
 import datetime
 import tempfile
@@ -8,6 +7,7 @@ import re
 import logging
 import pathlib
 import os
+import warnings
 from io import BytesIO, StringIO
 from contextlib import contextmanager
 
@@ -58,8 +58,10 @@ def ensure_open(
             opened.close()
 
 
-class FileResponseTweak:
-
+class FileResCallback:
+    """
+    to replace the deprecated FileResponseTweak
+    """
     def __init__(self, arg_name, mode):
         self.arg_name = arg_name
         self.mode = mode
@@ -91,6 +93,49 @@ class FileResponseTweak:
         response.headers.set('Content-Type', 'application/octest-stream')
         response.headers.set(
             'Content-Disposition', 'attachment', filename=self.arg_name)
+        return response
+
+
+class FileResponseTweak:
+    def __init__(self, arg_name, split_char='_', **mktemp_kwargs):
+        self.arg_name = arg_name
+        self.split_char = split_char
+        self.mktemp_kwargs = dict(mktemp_kwargs)
+        self.file_name = None
+        warnings.warn(
+            'class FileResponseTweak is deprecated', DeprecationWarning)
+
+    def gobble(self, cmd, name):
+        dummy = cmd
+        return name == self.arg_name
+
+    def pad_kwargs(self, cmd, kwargs):
+        dummy = cmd
+        self.file_name = tempfile.mktemp(**self.mktemp_kwargs)
+        kwargs[self.arg_name] = self.file_name
+
+    def name(self):
+        return self.__class__.__name__
+
+    def post_process_result(self, cmd, result):
+        logging.debug('Tweak %s ignores previous result of %s', self.name(),
+                      result)
+        response = None
+        # Use binary mode below to get consistent behaviour across platforms
+        with open(self.file_name, 'rb') as my_fd:
+            suffix = self.mktemp_kwargs.get('suffix', None)
+            if suffix and self.split_char and self.split_char in suffix:
+                fname = self.file_name.split(self.split_char)[-1]
+            else:
+                fname = self.file_name
+            response = make_response(my_fd.read())
+            response.headers.set('Content-Type', 'application/octest-stream')
+            response.headers.set(
+                'Content-Disposition', 'attachment', filename=fname)
+
+        if os.path.exists(self.file_name):
+            logging.info('Removing temporary file %s', self.file_name)
+            os.remove(self.file_name)
         return response
 
 
