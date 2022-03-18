@@ -103,7 +103,8 @@ class FileResponseTweak:
         self.mktemp_kwargs = dict(mktemp_kwargs)
         self.file_name = None
         warnings.warn(
-            'class FileResponseTweak is deprecated', DeprecationWarning)
+            'FileResponseTweak is deprecated. Use FileResCallback instead',
+            DeprecationWarning)
 
     def gobble(self, cmd, name):
         dummy = cmd
