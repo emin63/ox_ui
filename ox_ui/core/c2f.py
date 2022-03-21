@@ -1,6 +1,5 @@
 """Tools to convert click commands to flask WTForms
 """
-
 import typing
 import datetime
 import tempfile
@@ -8,13 +7,16 @@ import re
 import logging
 import pathlib
 import os
+import warnings
+from io import BytesIO, StringIO
+from contextlib import contextmanager
 
 from flask import render_template, make_response, request
 from flask_wtf import FlaskForm
 
 from jinja2 import Environment, BaseLoader
 
-from click import types
+from click import types, utils
 
 
 from wtforms import widgets
@@ -24,13 +26,85 @@ from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
 
 
-class FileResponseTweak:
+@contextmanager
+def ensure_open(
+        filelike: typing.Union[str, utils.LazyFile, BytesIO, StringIO],
+        *args, **kwargs):
+    """
+    ensure `filelike` is opened and ready for read or write.
 
+    `filelike` could be a str showing a file path,
+    or an instance of click.File, or BytesIO and StringIO in case the
+    field is gobbled.
+
+    For the first two cases, we will open `filelike`,
+    the mode will be specified in `*args` and `**kwargs`
+    if `filelike` is a str, or implied inside `filelike` if it is a click.File.
+
+    No need to open BytesIO or StringIO.
+    We must NOT close BytesIO or StringIO and leave it to client code to close
+    after `getvalue`. Otherwise, their content will be discarded right after
+    close.
+    """
+    opened = None
+    try:
+        if isinstance(filelike, str):
+            opened = open(filelike, *args, **kwargs)
+        elif isinstance(filelike, utils.LazyFile):
+            opened = filelike.open()
+        yield opened or filelike
+    finally:
+        if opened:
+            opened.close()
+
+
+class FileResCallback:
+    """
+    to replace the deprecated FileResponseTweak
+    """
+    def __init__(self, arg_name, mode):
+        self.arg_name = arg_name
+        self.mode = mode
+        self.buffer = None
+
+    def gobble(self, cmd, name):
+        dummy = cmd
+        return name == self.arg_name
+
+    def pad_kwargs(self, cmd, kwargs):
+        dummy = cmd
+        self.buffer = BytesIO() if 'b' in self.mode else StringIO()
+        kwargs[self.arg_name] = self.buffer
+
+    def name(self):
+        return self.__class__.__name__
+
+    def post_process_result(self, cmd, result):
+        logging.debug('Tweak %s ignores previous result of %s', self.name(),
+                      result)
+
+        try:
+            bytes_ = self.buffer.getvalue()
+            if isinstance(bytes_, str):
+                bytes_ = bytes_.encode('utf-8')
+        finally:
+            self.buffer.close()
+        response = make_response(bytes_)
+        response.headers.set('Content-Type', 'application/octest-stream')
+        response.headers.set(
+            'Content-Disposition', 'attachment', filename=self.arg_name)
+        return response
+
+
+class FileResponseTweak:
     def __init__(self, arg_name, split_char='_', **mktemp_kwargs):
         self.arg_name = arg_name
         self.split_char = split_char
         self.mktemp_kwargs = dict(mktemp_kwargs)
         self.file_name = None
+        warnings.warn(
+            'FileResponseTweak is deprecated. Use FileResCallback instead',
+            DeprecationWarning)
 
     def gobble(self, cmd, name):
         dummy = cmd
