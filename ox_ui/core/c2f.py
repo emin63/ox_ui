@@ -192,20 +192,24 @@ class ClickToWTF:
         self.fill_get_from_url = fill_get_from_url
         self.gobbled_opts = {}
 
-    def form_cls(self):
-
-        class ClickForm(FlaskForm):
-            """Form to run Click command.
-            """
-
+    def click_cmd_params(self):
         for opt in self.clickCmd.params:
             if self.skip_opt_re and self.skip_opt_re.search(opt.name):
                 logging.info('Option %s since matchs skip_opt_re', opt.name)
             elif self.gobble(opt.name):
                 logging.info('Option %s gobbled', opt.name)
             else:
-                field = self.click_opt_to_wtf_field(opt)
-                setattr(ClickForm, opt.name, field)
+                yield opt
+
+    def form_cls(self):
+
+        class ClickForm(FlaskForm):
+            """Form to run Click command.
+            """
+
+        for opt in self.click_cmd_params():
+            field = self.click_opt_to_wtf_field(opt)
+            setattr(ClickForm, opt.name, field)
 
         if request.method == 'GET' and self.fill_get_from_url:
             self.populate_form_from_url(ClickForm)
@@ -232,7 +236,7 @@ class ClickToWTF:
                   explicitly called by a "safe" command.
         """
         logging.debug('Populating form %s from URL', ClickForm)
-        for opt in self.clickCmd.params:
+        for opt in self.click_cmd_params():
             url_value = request.args.get(opt.name, None)
             if url_value is not None:
                 field = getattr(ClickForm, opt.name)
@@ -286,10 +290,8 @@ class ClickToWTF:
         return field
 
     def process(self, form):
-        kwargs = {}
-        for opt in self.clickCmd.params:
-            if opt.name in self.gobbled_opts:
-                continue
+        kwargs = {opt.name: opt.default for opt in self.clickCmd.params}
+        for opt in self.click_cmd_params():
             value = getattr(form, opt.name).data
             if opt.multiple:
                 cur = kwargs.get(opt.name, [])
