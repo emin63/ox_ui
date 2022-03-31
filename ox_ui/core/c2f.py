@@ -298,16 +298,15 @@ class ClickToWTF:
         raise TypeError(f'Cannot represent click type {opt.type} in WTF')
 
     def process(self, form):
-        kwargs = {opt.name: opt.default for opt in self.clickCmd.params}
+        defaults = {opt.name: opt.default for opt in self.clickCmd.params}
+        kwargs = {}
         for opt in self.click_cmd_params():
             value = getattr(form, opt.name).data
             if opt.multiple:
-                cur = kwargs.get(opt.name, [])
-                if not cur:
-                    kwargs[opt.name] = cur
-                cur.append(value)
+                kwargs[opt.name] = [*kwargs.get(opt.name, []), value]
             else:
                 kwargs[opt.name] = value
+        kwargs = {**defaults, **kwargs}
 
         self.pad_kwargs(kwargs)
         wrapped_cmd = getattr(self.clickCmd.callback, '__wrapped__', None)
