@@ -18,7 +18,7 @@ jobs:
       run: pip install -r requirements.txt
 
     - name: Show version
-      run: python3 -c 'import ox_ui; print(f"ox_ui version: {ox_ui.VERSION}")
+      run: python3 -c 'import ox_ui; print(f"ox_ui version: {ox_ui.VERSION}")'
 
     - name: Run tests
       run: make test
