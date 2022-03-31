@@ -264,10 +264,8 @@ class ClickToWTF:
             field = IntegerField(opt.name, validators=[], description=str(
                 opt.help), default=opt.default)
         elif opt.type == types.STRING:
-            field = StringField(opt.name, validators=[], description=str(
-                opt.help), default=opt.default)
-        elif opt.hide_input:
-            field = PasswordField(opt.name, validators=[], description=str(
+            field_cls = PasswordField if opt.hide_input else StringField
+            field = field_cls(opt.name, validators=[], description=str(
                 opt.help), default=opt.default)
         elif isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
