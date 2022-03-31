@@ -261,13 +261,13 @@ class ClickToWTF:
 
     def click_opt_to_wtf_field(self, opt):
         if opt.type == types.INT:
-            field = IntegerField(opt.name, validators=[], description=str(
+            return IntegerField(opt.name, validators=[], description=str(
                 opt.help), default=opt.default)
-        elif opt.type == types.STRING:
+        if opt.type == types.STRING:
             field_cls = PasswordField if opt.hide_input else StringField
-            field = field_cls(opt.name, validators=[], description=str(
+            return field_cls(opt.name, validators=[], description=str(
                 opt.help), default=opt.default)
-        elif isinstance(opt.type, types.DateTime) or (
+        if isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
             kwargs = {}
             if hasattr(opt, 'foramts'):
@@ -279,17 +279,15 @@ class ClickToWTF:
                 default = datetime.datetime.strptime(
                     default, '%Y-%m-%d %H:%M:%S')
 
-            field = DateTimeFieldTweak(
+            return DateTimeFieldTweak(
                 opt.name, validators=[], description=str(opt.help),
                 default=default, **kwargs)
-        elif isinstance(opt.type, types.File):
+        if isinstance(opt.type, types.File):
             if opt.type.mode in ('r', 'rb'):  # file to read
-                field = FileField(opt.name, validators=[], description=str(
+                return FileField(opt.name, validators=[], description=str(
                     opt.help))
-        else:
-            raise TypeError('Cannot represent click type %s in WTF' % (
-                opt.type))
-        return field
+        raise TypeError('Cannot represent click type %s in WTF' % (
+            opt.type))
 
     def process(self, form):
         kwargs = {opt.name: opt.default for opt in self.clickCmd.params}
