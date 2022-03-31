@@ -195,6 +195,9 @@ class ClickToWTF:
         self.gobbled_opts = {}
 
     def click_cmd_params(self):
+        """
+        to make sure skip_opt_re and gobbled specs are respected
+        """
         for opt in self.clickCmd.params:
             if self.skip_opt_re and self.skip_opt_re.search(opt.name):
                 logging.info('Option %s since matchs skip_opt_re', opt.name)
