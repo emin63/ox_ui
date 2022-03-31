@@ -20,7 +20,9 @@ from click import types, utils
 
 
 from wtforms import widgets
-from wtforms import BooleanField, StringField, IntegerField, FileField, Field
+from wtforms import (
+    StringField, IntegerField, FileField, Field, PasswordField)
+from wtforms.validators import DataRequired
 
 from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
@@ -192,20 +194,27 @@ class ClickToWTF:
         self.fill_get_from_url = fill_get_from_url
         self.gobbled_opts = {}
 
-    def form_cls(self):
-
-        class ClickForm(FlaskForm):
-            """Form to run Click command.
-            """
-
+    def click_cmd_params(self):
+        """
+        to make sure skip_opt_re and gobbled specs are respected
+        """
         for opt in self.clickCmd.params:
             if self.skip_opt_re and self.skip_opt_re.search(opt.name):
                 logging.info('Option %s since matchs skip_opt_re', opt.name)
             elif self.gobble(opt.name):
                 logging.info('Option %s gobbled', opt.name)
             else:
-                field = self.click_opt_to_wtf_field(opt)
-                setattr(ClickForm, opt.name, field)
+                yield opt
+
+    def form_cls(self):
+
+        class ClickForm(FlaskForm):
+            """Form to run Click command.
+            """
+
+        for opt in self.click_cmd_params():
+            field = self.click_opt_to_wtf_field(opt)
+            setattr(ClickForm, opt.name, field)
 
         if request.method == 'GET' and self.fill_get_from_url:
             self.populate_form_from_url(ClickForm)
@@ -232,7 +241,7 @@ class ClickToWTF:
                   explicitly called by a "safe" command.
         """
         logging.debug('Populating form %s from URL', ClickForm)
-        for opt in self.clickCmd.params:
+        for opt in self.click_cmd_params():
             url_value = request.args.get(opt.name, None)
             if url_value is not None:
                 field = getattr(ClickForm, opt.name)
@@ -254,17 +263,25 @@ class ClickToWTF:
         cls = self.form_cls()
         return cls()
 
-    def click_opt_to_wtf_field(self, opt):
+    @staticmethod
+    def click_opt_to_wtf_field(opt):
+        validators = []
+        if opt.required:
+            validators.append(
+                DataRequired(f'* required field'))
+        kwargs = dict(
+            validators=validators,
+            description=str(opt.help),
+            default=opt.default)
+
         if opt.type == types.INT:
-            field = IntegerField(opt.name, validators=[], description=str(
-                opt.help), default=opt.default)
-        elif opt.type == types.STRING:
-            field = StringField(opt.name, validators=[], description=str(
-                opt.help), default=opt.default)
-        elif isinstance(opt.type, types.DateTime) or (
+            return IntegerField(opt.name, **kwargs)
+        if opt.type == types.STRING:
+            field_cls = PasswordField if opt.hide_input else StringField
+            return field_cls(opt.name, **kwargs)
+        if isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
-            kwargs = {}
-            if hasattr(opt, 'foramts'):
+            if hasattr(opt, 'formats'):
                 kwargs['formats'] = opt.formats
             default = opt.default
             if callable(default):
@@ -272,24 +289,17 @@ class ClickToWTF:
             if isinstance(default, str):
                 default = datetime.datetime.strptime(
                     default, '%Y-%m-%d %H:%M:%S')
+            kwargs['default'] = default
 
-            field = DateTimeFieldTweak(
-                opt.name, validators=[], description=str(opt.help),
-                default=default, **kwargs)
-        elif isinstance(opt.type, types.File):
+            return DateTimeFieldTweak(opt.name, **kwargs)
+        if isinstance(opt.type, types.File):
             if opt.type.mode in ('r', 'rb'):  # file to read
-                field = FileField(opt.name, validators=[], description=str(
-                    opt.help))
-        else:
-            raise TypeError('Cannot represent click type %s in WTF' % (
-                opt.type))
-        return field
+                return FileField(opt.name, **kwargs)
+        raise TypeError(f'Cannot represent click type {opt.type} in WTF')
 
     def process(self, form):
-        kwargs = {}
-        for opt in self.clickCmd.params:
-            if opt.name in self.gobbled_opts:
-                continue
+        kwargs = {opt.name: opt.default for opt in self.clickCmd.params}
+        for opt in self.click_cmd_params():
             value = getattr(form, opt.name).data
             if opt.multiple:
                 cur = kwargs.get(opt.name, [])
