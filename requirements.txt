@@ -17,7 +17,6 @@ MarkupSafe==2.1.1
 mccabe==0.6.1
 ox-herd==0.8.1
 ox-secrets==0.3.6
-ox-ui==0.2.2
 packaging==21.3
 platformdirs==2.5.1
 pluggy==1.0.0
