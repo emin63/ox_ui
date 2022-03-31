@@ -21,7 +21,8 @@ from click import types, utils
 
 from wtforms import widgets
 from wtforms import (
-    BooleanField, StringField, IntegerField, FileField, Field, PasswordField)
+    StringField, IntegerField, FileField, Field, PasswordField)
+from wtforms.validators import DataRequired
 
 from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
@@ -259,18 +260,25 @@ class ClickToWTF:
         cls = self.form_cls()
         return cls()
 
-    def click_opt_to_wtf_field(self, opt):
+    @staticmethod
+    def click_opt_to_wtf_field(opt):
+        validators = []
+        if opt.required:
+            validators.append(
+                DataRequired(f'* required field'))
+        kwargs = dict(
+            validators=validators,
+            description=str(opt.help),
+            default=opt.default)
+
         if opt.type == types.INT:
-            return IntegerField(opt.name, validators=[], description=str(
-                opt.help), default=opt.default)
+            return IntegerField(opt.name, **kwargs)
         if opt.type == types.STRING:
             field_cls = PasswordField if opt.hide_input else StringField
-            return field_cls(opt.name, validators=[], description=str(
-                opt.help), default=opt.default)
+            return field_cls(opt.name, **kwargs)
         if isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
-            kwargs = {}
-            if hasattr(opt, 'foramts'):
+            if hasattr(opt, 'formats'):
                 kwargs['formats'] = opt.formats
             default = opt.default
             if callable(default):
@@ -278,16 +286,13 @@ class ClickToWTF:
             if isinstance(default, str):
                 default = datetime.datetime.strptime(
                     default, '%Y-%m-%d %H:%M:%S')
+            kwargs['default'] = default
 
-            return DateTimeFieldTweak(
-                opt.name, validators=[], description=str(opt.help),
-                default=default, **kwargs)
+            return DateTimeFieldTweak(opt.name, **kwargs)
         if isinstance(opt.type, types.File):
             if opt.type.mode in ('r', 'rb'):  # file to read
-                return FileField(opt.name, validators=[], description=str(
-                    opt.help))
-        raise TypeError('Cannot represent click type %s in WTF' % (
-            opt.type))
+                return FileField(opt.name, **kwargs)
+        raise TypeError(f'Cannot represent click type {opt.type} in WTF')
 
     def process(self, form):
         kwargs = {opt.name: opt.default for opt in self.clickCmd.params}
