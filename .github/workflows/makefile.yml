@@ -15,10 +15,7 @@ jobs:
     - uses: actions/checkout@v3
     
     - name: Install dependancies
-      run: pip install -r requirements.txt
-
-    - name: Show version
-      run: python3 -c 'import ox_ui; print(f"ox_ui version: {ox_ui.VERSION}")
+      run: pip install -r requirements.txt && pip install -e .
 
     - name: Run tests
       run: make test
