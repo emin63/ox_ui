@@ -20,7 +20,8 @@ from click import types, utils
 
 
 from wtforms import widgets
-from wtforms import BooleanField, StringField, IntegerField, FileField, Field
+from wtforms import (
+    BooleanField, StringField, IntegerField, FileField, Field, PasswordField)
 
 from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
@@ -264,6 +265,9 @@ class ClickToWTF:
                 opt.help), default=opt.default)
         elif opt.type == types.STRING:
             field = StringField(opt.name, validators=[], description=str(
+                opt.help), default=opt.default)
+        elif opt.hide_input:
+            field = PasswordField(opt.name, validators=[], description=str(
                 opt.help), default=opt.default)
         elif isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
