@@ -16,5 +16,5 @@ jobs:
     
      
     - name: Run tests
-      run: make test
+      run: pip install -r requirements.txt && make test
       
