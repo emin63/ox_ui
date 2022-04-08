@@ -21,7 +21,7 @@ from click import types, utils
 
 from wtforms import widgets
 from wtforms import (
-    StringField, IntegerField, FileField, Field, PasswordField)
+    StringField, IntegerField, FileField, Field, PasswordField, SelectField)
 from wtforms.validators import DataRequired
 
 from ox_ui import core as ox_ui_core
@@ -263,8 +263,8 @@ class ClickToWTF:
         cls = self.form_cls()
         return cls()
 
-    @staticmethod
-    def click_opt_to_wtf_field(opt):
+    @classmethod
+    def click_opt_to_wtf_field(cls, opt):
         validators = []
         if opt.required:
             validators.append(
@@ -295,7 +295,16 @@ class ClickToWTF:
         if isinstance(opt.type, types.File):
             if opt.type.mode in ('r', 'rb'):  # file to read
                 return FileField(opt.name, **kwargs)
+        if getattr(opt.type, 'name') == 'choice':
+            return cls.handle_choice_type(opt, **kwargs)
         raise TypeError(f'Cannot represent click type {opt.type} in WTF')
+
+    @staticmethod
+    def handle_choice_type(opt, **kwargs):
+        """Turn click.Choice into SelectField.
+        """
+        return SelectField(opt.name, choices=[
+            (n, n) for n in opt.type.choices], **kwargs)
 
     def process(self, form):
         defaults = {opt.name: opt.default for opt in self.clickCmd.params}

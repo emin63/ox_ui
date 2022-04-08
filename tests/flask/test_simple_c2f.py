@@ -43,11 +43,23 @@ class BasicC2FTest(unittest.TestCase):
                 self.assertEqual(req.status_code, 200)
                 self.assertEqual(req.text, str(len(data)))
 
+    def test_choice(self):
+        "Test if the choice mapping works right."
+
+        url = 'http://127.0.0.1:%s/favorite_color' % (
+            self.server_info.s_port)
+        post_req = requests.post(url)  # default
+        self.assertEqual(post_req.status_code, 200)
+        self.assertEqual(post_req.text, 'I like green as well.')
+        post_req = requests.post(url, data={'color': 'red'})  # choose red
+        self.assertEqual(post_req.status_code, 200)
+        self.assertEqual(post_req.text, 'I like red as well.')
+
     def test_good_c2f(self):
         url = 'http://127.0.0.1:%s/hello' % (self.server_info.s_port)
         count, text = 3, 'bye'
         self.check_good_c2f(url, count, text)
-        
+
         count, text = 2, 'why'
         url = 'http://127.0.0.1:%s/goodbye' % (self.server_info.s_port)
         self.check_good_c2f(
@@ -57,7 +69,7 @@ class BasicC2FTest(unittest.TestCase):
     def check_good_c2f(self, url, count, text, more='', **extras):
 
         data = {'count': count, 'text': text}
-        data.update(extras)        
+        data.update(extras)
         get_req = requests.get(url)
         self.assertEqual(get_req.status_code, 200)
         post_req = requests.post(url, data=data)
@@ -71,4 +83,3 @@ class BasicC2FTest(unittest.TestCase):
         count, text = 'bad', 'bye'
         post_req = requests.post(url, data={'count': count, 'text': text})
         self.assertEqual(post_req.status_code, 200)
-

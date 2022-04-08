@@ -1,4 +1,10 @@
 """Module to run minimal flask app to be used for tests.
+
+You can do something like the following to serve this app
+if you want to test/debug manually:
+
+  FLASK_APP=c2f_app.py python3 -m flask run
+
 """
 
 import datetime
@@ -54,6 +60,15 @@ def count_file_size_cmd(datafile):
     return str(result)
 
 
+@click.command()
+@click.option('--color', type=click.Choice(['red', 'green', 'blue']), help=(
+    'Favorite color.'), default='green')
+def favorite_color_cmd(color):
+    "Tell me your favorite color."
+
+    return f'I like {color} as well.'
+
+
 @APP.route('/')
 def home():
     url = url_for('hello')
@@ -76,3 +91,8 @@ def goodbye():
 @APP.route('/count_file_size', methods=('GET', 'POST'))
 def count_file_size():
     return c2f.ClickToWTF(count_file_size_cmd).handle_request()
+
+
+@APP.route('/favorite_color', methods=('GET', 'POST'))
+def favorite_color():
+    return c2f.ClickToWTF(favorite_color_cmd).handle_request()
