@@ -139,7 +139,7 @@ This is needed so we can handle some special types of options differently.
         elif isinstance(opt.type, types.DateTime) or (
                 getattr(opt.type, 'name', '?') == 'datetime'):
             field = self.make_dt_field(opt)
-        elif isinstance(opt.type, types.File):
+        elif isinstance(opt.type, (types.File, types.Path)):
             field = self.make_file_field(opt)
         else:
             raise TypeError(f'Cannot represent click type {opt.type}')
