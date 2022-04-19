@@ -178,21 +178,20 @@ This is needed so we can handle some special types of options differently.
             raw_result = wrapped_cmd(**kwargs)
         else:
             raw_result = self.click_cmd.callback(**kwargs)
-        result = raw_result
-        for tweak in self.tweaks:
-            result = tweak.post_process_result(self, result)
 
-        return result
+        return self.post_process(raw_result)
 
-    def post_process_result(self, raw_result):
+    def post_process(self, raw_result):
         """Take output of process method and do further postprocessing.
 
         Intended for sub-classes to override.
         """
-
         logging.debug('For %s, post-processing raw_result %s',
                       self, raw_result)
-        return raw_result
+        result = raw_result
+        for tweak in self.tweaks:
+            result = tweak.post_process_result(self, result)
+        return result
 
     def handle_request(self, opts=None):
         """Handle request to run command:

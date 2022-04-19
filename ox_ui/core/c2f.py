@@ -323,14 +323,14 @@ class ClickToWTF:
             raw_result = wrapped_cmd(**kwargs)
         else:
             raw_result = self.clickCmd.callback(**kwargs)
+
+        return self.post_process(raw_result)
+
+    def post_process(self, raw_result):
         result = raw_result
         for tweak in self.tweaks:
             result = tweak.post_process_result(self, result)
-
         return result
-
-    def post_process_result(self, raw_result):
-        return raw_result
 
     def get_form_data(self) -> typing.Dict[str, typing.Any]:
         """Return dictionary of form data for show_form method.
