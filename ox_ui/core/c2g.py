@@ -99,6 +99,14 @@ This is needed so we can handle some special types of options differently.
             opt.name, description=opt.help, default=opt.default,
             type=int)
 
+    def make_bool_field(self, opt):
+        "Make a bool field."
+
+        logging.debug('Making field for %s', self)
+        return GenericField(
+            opt.name, description=opt.help, default=opt.default,
+            type=bool)
+
     def make_str_field(self, opt):
         "Make a string field."
 
@@ -134,6 +142,8 @@ This is needed so we can handle some special types of options differently.
         """
         if opt.type == types.INT:
             field = self.make_int_field(opt)
+        elif opt.type == types.BOOL:
+            field = self.make_bool_field(opt)
         elif opt.type == types.STRING:
             field = self.make_str_field(opt)
         elif isinstance(opt.type, types.DateTime) or (
