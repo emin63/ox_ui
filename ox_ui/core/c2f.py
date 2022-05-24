@@ -148,9 +148,11 @@ class DateTimeFieldTweak(Field):
     widget = widgets.TextInput()
 
     def __init__(self, label=None, validators=None,
-                 formats=('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'), **kwargs):
+                 formats=('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'),
+                 required=False, **kwargs):
         super(DateTimeFieldTweak, self).__init__(label, validators, **kwargs)
         self.formats = formats
+        self.required = required
 
     def _value(self):
         if self.raw_data:
@@ -166,7 +168,8 @@ class DateTimeFieldTweak(Field):
                     return
                 except ValueError:
                     self.data = None
-        raise ValueError(self.gettext('Not a valid datetime value'))
+        if self.required:
+            raise ValueError(self.gettext('Not a valid datetime value'))
 
 
 class ClickToWTF:
