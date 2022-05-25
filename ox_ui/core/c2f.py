@@ -9,7 +9,7 @@ import pathlib
 import os
 import warnings
 from io import BytesIO, StringIO
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 
 from flask import render_template, make_response, request
 from flask_wtf import FlaskForm
@@ -156,7 +156,10 @@ class DateTimeFieldTweak(Field):
 
     def process_formdata(self, valuelist):
         if valuelist:
-            if date_str := ' '.join(valuelist).strip():
+            if date_str := ' '.join(valuelist):
+                # populate self.data with data_str to pass DataRequired check,
+                # so we show parse error instead of the "required field" error
+                # on bad inputs
                 self.data = date_str
                 try:
                     self.data = parse(date_str)
