@@ -13,16 +13,13 @@ from contextlib import contextmanager
 
 from flask import render_template, make_response, request
 from flask_wtf import FlaskForm
-
 from jinja2 import Environment, BaseLoader
-
 from click import types, utils
-
-
 from wtforms import widgets
 from wtforms import (
     StringField, IntegerField, FileField, Field, PasswordField, SelectField)
 from wtforms.validators import DataRequired
+from dateutil.parser import parse, ParserError
 
 from ox_ui import core as ox_ui_core
 from ox_ui.assets import css
@@ -159,14 +156,15 @@ class DateTimeFieldTweak(Field):
 
     def process_formdata(self, valuelist):
         if valuelist:
-            date_str = ' '.join(valuelist)
-            for fmt in self.formats:
+            if date_str := ' '.join(valuelist):
+                # populate self.data with data_str to pass DataRequired check,
+                # so we show parse error instead of the "required field" error
+                # on bad inputs
+                self.data = date_str
                 try:
-                    self.data = datetime.datetime.strptime(date_str, fmt)
-                    return
-                except ValueError:
-                    self.data = None
-        raise ValueError(self.gettext('Not a valid datetime value'))
+                    self.data = parse(date_str)
+                except ParserError as err:
+                    raise ValueError(str(err))
 
 
 class ClickToWTF:
