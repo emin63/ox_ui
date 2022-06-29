@@ -61,9 +61,10 @@ class FileResCallback:
     """
     to replace the deprecated FileResponseTweak
     """
-    def __init__(self, arg_name, mode):
+    def __init__(self, arg_name, mode, filename):
         self.arg_name = arg_name
         self.mode = mode
+        self.filename = filename
         self.buffer = None
 
     def gobble(self, cmd, name):
@@ -91,7 +92,7 @@ class FileResCallback:
         response = make_response(bytes_)
         response.headers.set('Content-Type', 'application/octest-stream')
         response.headers.set(
-            'Content-Disposition', 'attachment', filename=self.arg_name)
+            'Content-Disposition', 'attachment', filename=self.filename)
         return response
 
 
