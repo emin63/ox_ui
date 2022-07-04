@@ -17,7 +17,8 @@ from jinja2 import Environment, BaseLoader
 from click import types, utils
 from wtforms import widgets
 from wtforms import (
-    StringField, IntegerField, FileField, Field, PasswordField, SelectField)
+    StringField, IntegerField, FileField, Field, PasswordField, SelectField,
+    BooleanField)
 from wtforms.validators import DataRequired
 from dateutil.parser import parse, ParserError
 
@@ -275,6 +276,8 @@ class ClickToWTF:
 
         if opt.type == types.INT:
             return IntegerField(opt.name, **kwargs)
+        if opt.type == types.BOOL:
+            return BooleanField(opt.name, **kwargs)
         if opt.type == types.STRING:
             field_cls = PasswordField if opt.hide_input else StringField
             return field_cls(opt.name, **kwargs)
