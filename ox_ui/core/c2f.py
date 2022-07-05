@@ -17,7 +17,8 @@ from jinja2 import Environment, BaseLoader
 from click import types, utils
 from wtforms import widgets
 from wtforms import (
-    StringField, IntegerField, FileField, Field, PasswordField, SelectField)
+    StringField, IntegerField, FileField, Field, PasswordField, SelectField,
+    BooleanField)
 from wtforms.validators import DataRequired
 from dateutil.parser import parse, ParserError
 
@@ -61,9 +62,10 @@ class FileResCallback:
     """
     to replace the deprecated FileResponseTweak
     """
-    def __init__(self, arg_name, mode):
+    def __init__(self, arg_name, mode, filename):
         self.arg_name = arg_name
         self.mode = mode
+        self.filename = filename
         self.buffer = None
 
     def gobble(self, cmd, name):
@@ -91,7 +93,7 @@ class FileResCallback:
         response = make_response(bytes_)
         response.headers.set('Content-Type', 'application/octest-stream')
         response.headers.set(
-            'Content-Disposition', 'attachment', filename=self.arg_name)
+            'Content-Disposition', 'attachment', filename=self.filename)
         return response
 
 
@@ -274,6 +276,8 @@ class ClickToWTF:
 
         if opt.type == types.INT:
             return IntegerField(opt.name, **kwargs)
+        if opt.type == types.BOOL:
+            return BooleanField(opt.name, **kwargs)
         if opt.type == types.STRING:
             field_cls = PasswordField if opt.hide_input else StringField
             return field_cls(opt.name, **kwargs)
