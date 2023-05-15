@@ -12,10 +12,13 @@ import datetime
 import click
 from flask import Flask, url_for
 
-from ox_ui.core import c2f
+from ox_ui.core import c2f, decorators
+
 
 APP = Flask(__name__)
 APP.config['WTF_CSRF_ENABLED'] = False
+decorators.setup_flask_watch(APP)
+
 
 @click.command()
 @click.option('--count', default=1, type=int, help='how many times to say it')
