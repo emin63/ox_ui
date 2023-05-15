@@ -1,5 +1,10 @@
+"""Test using flask server.
+"""
 
+import logging
 import os
+import socket
+import time
 import pathlib
 import unittest
 import tempfile
@@ -22,6 +27,18 @@ class BasicC2FTest(unittest.TestCase):
         env = os.environ.copy()
         env['FLASK_APP'] = str(cwd.joinpath('c2f_app.py'))
         cls.server_info = server_tools.start_server(cmd=cmd, cwd=cwd, env=env)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        for attempt in range(10):
+            result = sock.connect_ex(('127.0.0.1', cls.server_info.s_port))
+            if result == 0:
+                logging.info('Succesfully started server at port %s',
+                             cls.server_info.s_port)
+                break
+            else:
+                logging.warning('Sleeping 2**%i to wait for server', attempt)
+                time.sleep(2**i)
+        else:
+            raise ValueError('Could not start flask server.')
 
     @classmethod
     def tearDownClass(cls):
@@ -48,7 +65,7 @@ class BasicC2FTest(unittest.TestCase):
 
         url = 'http://127.0.0.1:%s/favorite_color' % (
             self.server_info.s_port)
-        post_req = requests.post(url)  # default
+        post_req = requests.post(url, data={'color': 'green'})  # default
         self.assertEqual(post_req.status_code, 200)
         self.assertEqual(post_req.text, 'I like green as well.')
         post_req = requests.post(url, data={'color': 'red'})  # choose red

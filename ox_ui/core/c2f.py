@@ -174,17 +174,17 @@ class ClickToWTF:
     def __init__(self, clickCmd, skip_opt_re=None, tweaks: list = None,
                  fill_get_from_url: bool = False):
         """Initializer.
-        
+
         :param clickCmd:   A click command to turn into a form.
-        
+
         :param skip_opt_re=None:  Regexp for options to skip in form.
-        
+
         :param tweaks:  List of 'tweaks' to add (e.g., FileResponseTweak).
-        
+
         :param fill_get_from_url:  If True, then when doing a GET request
                                    to fill out arguments we look in the
                                    URL params to override standard defaults.
-        
+
         """
         self.clickCmd = clickCmd
         self.rawTemplate = None
@@ -218,7 +218,7 @@ class ClickToWTF:
 
         if request.method == 'GET' and self.fill_get_from_url:
             self.populate_form_from_url(ClickForm)
-            
+
         return ClickForm
 
     def populate_form_from_url(self, ClickForm):
@@ -260,7 +260,15 @@ class ClickToWTF:
             tweak.pad_kwargs(self, kwargs)
 
     def form(self):
-        cls = self.form_cls()
+        try:
+            cls = self.form_cls()
+        except Exception as prob:  # pylint: disable=broad-except
+            #  Sometimes if you do a POST and do not provide all the
+            #  values expected by a form, newer versions of Flask will
+            #  have problems.
+            logging.exception(
+                'Unable to make form. If doing a POST; verify data provided.')
+            raise
         return cls()
 
     @classmethod
@@ -353,7 +361,7 @@ A standard pattern is to override this via something like
 
         """
         return {'intro': self.clickCmd.help}
-        
+
     def show_form(self, form=None, template=None):
         if form is None:
             form = self.form()
