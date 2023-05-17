@@ -1,9 +1,15 @@
 """Useful decorators.
 """
 
+import os
+import json
 import uuid
 import logging
+import datetime
 import time
+import threading
+
+from contextlib import ContextDecorator
 
 import wrapt
 
@@ -183,3 +189,75 @@ something like `watched_cmd*` to see info about your flask commands.
     """
     app.before_request(_start_watching_request)
     app.teardown_request(_end_watching_request)
+
+
+class LockFile(ContextDecorator):
+    """Context decorator to create/check lock files.
+
+This class can serve as a decorator or a context manager to
+create/check a lock file.
+
+The following illustrates example usage:
+
+>>> import time, threading, os, logging
+>>> from ox_ui.core import decorators
+>>> lock_path = '/tmp/test.lock'     # example lock file path
+>>> @decorators.LockFile(lock_path)  # decorate function to use lock file
+... def foo(t, m):
+...     assert os.path.exists(lock_path)
+...     logging.warning('%s Sleep %s thread %s', m, t, threading.get_ident())
+...     time.sleep(t)
+...
+>>> my_thread = threading.Thread(target=foo, args=[5, 'thread'])
+>>> problems = []  # Thread is started in background.
+>>> try:           # Verify a FileExistsError raised if conflict occurs.
+...     my_thread.start()  # start a background thread with the lock
+...     while not os.path.exists(lock_path):
+...         time.sleep(0.5)
+...     foo(4, 'main')     # now spawn in main thread to poke lock
+... except Exception as problem:
+...     problems.append(problem)
+...
+>>> assert len(problems) > 0, problems  # Verify we caught an exception.
+
+    """
+
+    def __init__(self, lockpath, comment='', encoding='utf8'):
+        self.lockpath = lockpath
+        self.encoding = encoding
+        self.comment = comment
+        self.created = None
+
+    def remove_lock(self):
+        """Remove lock if it exists.
+        """
+        if os.path.exists(self.lockpath):
+            os.remove(self.lockpath)
+
+    def __enter__(self):
+        if os.path.exists(self.lockpath):
+            info = 'unknown'
+            try:
+                with open(self.lockpath, encoding=self.encoding) as fdesc:
+                    info = json.load(fdesc)
+                logging.warning('Found lock file %s with data: %s',
+                                self.lockpath, info)
+            except Exception:  # pylint: disable=broad-except
+                logging.exception('Unable to get info about lock file %s',
+                                  self.lockpath)
+            raise FileExistsError(self.lockpath)
+        with open(self.lockpath, 'w', encoding=self.encoding) as fdesc:
+            self.created = datetime.datetime.now()
+            info = {'pid': os.getpid(), 'comment': self.comment,
+                    'thread_id': threading.get_ident(),
+                    'created_dt': str(self.created),
+                    'created_ts': self.created.timestamp()}
+            json.dump(info, fdesc, indent=2)
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb):
+        if exc_type:
+            logging.debug('Ignoring exception info %s, %s, %s',
+                          exc_type, exc, exc_tb)
+        self.remove_lock()
+        return False
