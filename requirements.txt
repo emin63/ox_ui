@@ -7,7 +7,7 @@ dill==0.3.4
 execnet==1.9.0
 eyap==0.9.3
 flake8==4.0.1
-Flask==2.0.3
+Flask==2.2.5
 Flask-WTF==1.0.0
 idna==3.3
 iniconfig==1.1.1
