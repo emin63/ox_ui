@@ -56,6 +56,8 @@ Once you start your flask web server, you will then have a route that
 introspects =hello_cmd=, creates a web form using the =WTForms=
 library and handles the command.
 
+See examples in the =tests= directory for more details.
+
 * Other Utilities
 
 A few additional utilites are provided in the
