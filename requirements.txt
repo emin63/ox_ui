@@ -31,7 +31,7 @@ pytest==7.1.1
 pytest-forked==1.4.0
 pytest-xdist==2.5.0
 python-dateutil==2.8.2
-requests==2.27.1
+requests==2.31.0
 six==1.16.0
 tomli==2.0.1
 typing-extensions==4.1.1
