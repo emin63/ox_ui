@@ -18,7 +18,7 @@ from click import types, utils
 from wtforms import widgets
 from wtforms import (
     StringField, IntegerField, FileField, Field, PasswordField, SelectField,
-    BooleanField, HiddenField)
+    BooleanField, HiddenField, FloatField)
 from wtforms.validators import DataRequired
 from dateutil.parser import parse, ParserError
 
@@ -163,7 +163,11 @@ class DateTimeFieldTweak(Field):
     def _value(self):
         if self.raw_data:
             return ' '.join(self.raw_data)
-        return self.data and self.data.strftime(self.formats[0]) or ''
+        if self.data:
+            if isinstance(self.data, str):
+                return self.data
+            return self.data.strftime(self.formats[0])
+        return ''
 
     def process_formdata(self, valuelist):
         if valuelist:
@@ -310,6 +314,8 @@ class ClickToWTF:
 
         if opt.type == types.INT:
             return IntegerField(opt.name, **kwargs)
+        if opt.type == types.FLOAT:
+            return FloatField(opt.name, **kwargs)        
         if opt.type == types.BOOL:
             return BooleanField(opt.name, **kwargs)
         if opt.type == types.STRING:
