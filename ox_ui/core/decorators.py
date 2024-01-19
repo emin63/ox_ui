@@ -70,7 +70,8 @@ def _end_watch(w_data, str_result):
     cmd_time = time.time() - w_data['start']
     w_data.update(watched='end', status='ok', w_run_time=cmd_time,
                   w_result=str_result)
-    logging.info('watched_cmd_end: ok:%s', w_data['w_name'], extra=w_data)
+    logging.info('watched_cmd_end: ok:%s (%.4f s)', w_data['w_name'],
+                 cmd_time, extra=w_data)
     return w_data
 
 

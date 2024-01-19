@@ -18,7 +18,7 @@ from click import types, utils
 from wtforms import widgets
 from wtforms import (
     StringField, IntegerField, FileField, Field, PasswordField, SelectField,
-    BooleanField)
+    BooleanField, HiddenField, FloatField)
 from wtforms.validators import DataRequired
 from dateutil.parser import parse, ParserError
 
@@ -56,6 +56,15 @@ def ensure_open(
     finally:
         if opened:
             opened.close()
+
+
+class RequestResult(typing.NamedTuple):
+    """Result of handle_request method of ClickToWTF class.
+    """
+
+    finished: bool
+    form: typing.Any
+    output: typing.Any
 
 
 class FileResCallback:
@@ -154,7 +163,11 @@ class DateTimeFieldTweak(Field):
     def _value(self):
         if self.raw_data:
             return ' '.join(self.raw_data)
-        return self.data and self.data.strftime(self.formats[0]) or ''
+        if self.data:
+            if isinstance(self.data, str):
+                return self.data
+            return self.data.strftime(self.formats[0])
+        return ''
 
     def process_formdata(self, valuelist):
         if valuelist:
@@ -172,7 +185,9 @@ class DateTimeFieldTweak(Field):
 class ClickToWTF:
 
     def __init__(self, clickCmd, skip_opt_re=None, tweaks: list = None,
-                 fill_get_from_url: bool = False):
+                 fill_get_from_url: bool = False,
+                 hidden_overrides = None,
+                 require_re = None):
         """Initializer.
 
         :param clickCmd:   A click command to turn into a form.
@@ -185,6 +200,15 @@ class ClickToWTF:
                                    to fill out arguments we look in the
                                    URL params to override standard defaults.
 
+        :param hidden_overrides:  Optional dictionary with string keys
+                                  indicating fields to hide in WTForm and
+                                  values indicating the value to provide.
+                                  For example, if you provide something like
+                                  {'user': 'anon'} then the option 'user' in
+                                  `clickCmd` will not be visibile in the
+                                  WTForm but contain a hidden value set to
+                                  `'anon'`. This is useful to force certain
+                                  values in the web form.
         """
         self.clickCmd = clickCmd
         self.rawTemplate = None
@@ -193,6 +217,9 @@ class ClickToWTF:
         self.tweaks = tweaks if tweaks else []
         self.fill_get_from_url = fill_get_from_url
         self.gobbled_opts = {}
+        self.hidden_overrides = dict(
+            hidden_overrides) if hidden_overrides else {}
+        self.require_re = dict(require_re) if require_re else {}
 
     def click_cmd_params(self):
         """
@@ -218,6 +245,9 @@ class ClickToWTF:
 
         if request.method == 'GET' and self.fill_get_from_url:
             self.populate_form_from_url(ClickForm)
+
+        for name, value in self.hidden_overrides.items():
+            setattr(ClickForm, name, HiddenField(name, default=value))
 
         return ClickForm
 
@@ -284,6 +314,8 @@ class ClickToWTF:
 
         if opt.type == types.INT:
             return IntegerField(opt.name, **kwargs)
+        if opt.type == types.FLOAT:
+            return FloatField(opt.name, **kwargs)        
         if opt.type == types.BOOL:
             return BooleanField(opt.name, **kwargs)
         if opt.type == types.STRING:
@@ -316,6 +348,23 @@ class ClickToWTF:
         return SelectField(opt.name, choices=[
             (n, n) for n in opt.type.choices], **kwargs)
 
+    def _verify_kwargs(self, kwargs):
+        for name, value in self.hidden_overrides.items():
+            actual = kwargs.get(name, None)
+            regexp = self.require_re.get(name, None)
+            if regexp is not None:
+                pass  # we will validate later when we check require_re
+            elif actual != value:
+                #  Someone may have manually tried to circumvent override
+                raise ValueError(f'Field {name} must match default {value}'
+                                 f' (got {actual}).')
+        for name, value in self.require_re.items():
+            actual = kwargs.get(name, '')
+            if not re.compile(value).match(actual):
+                raise ValueError(
+                    f'Field {name} does not match regexp {value}'
+                    f' (got {actual}).')
+
     def process(self, form):
         defaults = {opt.name: opt.default for opt in self.clickCmd.params}
         kwargs = {}
@@ -326,7 +375,7 @@ class ClickToWTF:
             else:
                 kwargs[opt.name] = value
         kwargs = {**defaults, **kwargs}
-
+        self._verify_kwargs(kwargs)
         self.pad_kwargs(kwargs)
         wrapped_cmd = getattr(self.clickCmd.callback, '__wrapped__', None)
         if wrapped_cmd:
@@ -384,10 +433,13 @@ A standard pattern is to override this via something like
         result = rtemplate.render(form=form, **data)
         return result
 
-    def handle_request(self):
+    def handle_request(self, verbose=False):
         form = self.form()
         if form.validate_on_submit():
-            result = self.process(form)
+            result = RequestResult(True, form, self.process(form))
+        else:
+            logging.debug('Showing form either because invalid or first view')
+            result = RequestResult(False, form, self.show_form(form=form))
+        if verbose:
             return result
-        logging.debug('Showing form either because invalid or first view')
-        return self.show_form(form=form)
+        return result.output

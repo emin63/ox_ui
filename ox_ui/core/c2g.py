@@ -99,6 +99,14 @@ This is needed so we can handle some special types of options differently.
             opt.name, description=opt.help, default=opt.default,
             type=int)
 
+    def make_float_field(self, opt):
+        "Make a float field."
+
+        logging.debug('Making field for %s', self)
+        return GenericField(
+            opt.name, description=opt.help, default=opt.default,
+            type=float)
+    
     def make_bool_field(self, opt):
         "Make a bool field."
 
@@ -151,6 +159,8 @@ This is needed so we can handle some special types of options differently.
             field = self.make_dt_field(opt)
         elif isinstance(opt.type, (types.File, types.Path)):
             field = self.make_file_field(opt)
+        elif opt.type == types.FLOAT:
+            field = self.make_float_field(opt)
         else:
             raise TypeError(f'Cannot represent click type {opt.type}')
         return field
