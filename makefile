@@ -9,8 +9,8 @@ help:
 	@echo "pypi:  Push package to pypi (requiers appropriate permissions)."
 	@echo " "
 
-pypi: README.rst
-	 python3 setup.py sdist upload -r pypi
+pypi:  test README.rst  ## Push project to pypi
+	python3 setup.py sdist && twine upload dist/*
 
 README.rst: README.org
 	pandoc --from=org --to=rst --output=README.rst README.org
