@@ -902,8 +902,11 @@ class MainApp(tk.Tk):
                     add_tooltip(btn, model_doc)
 
     def _open_command(self, info):
-        """Open a ModelCommandWindow for *info*."""
-        assert len(info.parameters) <= 1
+        """Open ModelCommandWindow for *info* or just run it if on params."""
+        if not info.parameters:
+            return info.callback()
+        if len(info.parameters) != 1:
+            raise ValueError(f'Cannot handle {info=} when parameters !=1.')
         ModelCommandWindow(
             self, command=info, url_var=self._url_var,
             timeout_var=self._timeout_var, max_horizontal=4)
