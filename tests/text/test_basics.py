@@ -13,7 +13,7 @@ from ox_ui.core import c2g, decorators
               help='Name of person to hello.')
 @click.option('--count', '-c', help='How many times to repeat.',
               default=1)
-@click.option('--when', '-w', type=click.DateTime())
+@click.option('--when', '-w', type=click.DateTime(), default=None)
 @click.option('--dry-run/--no-dry-run', default=False, help=(
     'If dry-run then do nothing and return ["dry-run"]'))
 def hello_world(name, count, when, dry_run):

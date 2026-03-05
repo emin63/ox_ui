@@ -150,7 +150,7 @@ This is needed so we can handle some special types of options differently.
         """
         if opt.type == types.INT:
             field = self.make_int_field(opt)
-        elif opt.type == types.BOOL:
+        elif opt.type == types.BOOL or str(opt.type) == 'BOOL':
             field = self.make_bool_field(opt)
         elif opt.type == types.STRING:
             field = self.make_str_field(opt)
