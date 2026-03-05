@@ -5,7 +5,7 @@
 from typing import Callable, List, Optional, Type
 from typing_extensions import Self
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class Command(BaseModel):
@@ -13,7 +13,7 @@ class Command(BaseModel):
     """
 
     title: str
-    parameters: List[Type[BaseModel]]
+    parameters: List[Type[BaseModel]] = Field(default_factory=list)
     description: str
     name: Optional[str] = None
 
