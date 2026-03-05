@@ -904,7 +904,7 @@ class MainApp(tk.Tk):
     def _open_command(self, info):
         """Open ModelCommandWindow for *info* or just run it if on params."""
         if not info.parameters:
-            return info.callback()
+            return info.callback(parent=self)
         if len(info.parameters) != 1:
             raise ValueError(f'Cannot handle {info=} when parameters !=1.')
         ModelCommandWindow(
