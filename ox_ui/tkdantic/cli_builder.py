@@ -365,12 +365,16 @@ def _command_without_params(cmd):
 # Public API: convenience for @pydantic_method classes
 # -----------------------------------------------------------
 
-def click_group_from_cls(klass, name=None):
+def click_group_from_cls(klass, name=None, instance=None):
     """Build a :class:`click.Group` by inspecting *klass*.
 
     Discovers methods decorated with ``@pydantic_method`` via
-    :func:`commands_for_cls`, then delegates to
-    :func:`click_group_from_commands`.
+    :func:`commands_for_cls`, then binds each method to a
+    live *instance* so they can be invoked from the CLI.
+
+    If *instance* is ``None`` (the default), *klass* is
+    instantiated with no arguments.  Pass a pre-built
+    instance when the constructor requires parameters.
 
     Example::
 
@@ -384,4 +388,30 @@ def click_group_from_cls(klass, name=None):
         cli()
     """
     commands = commands_for_cls(klass)
+    if instance is None:
+        instance = klass()
+    commands = _bind_commands(commands, instance)
     return click_group_from_commands(commands, name=name)
+
+
+def _bind_commands(commands, instance):
+    """Bind discovered commands to a live *instance*.
+
+    For each :class:`Command` whose ``callback`` is ``None``,
+    look up the corresponding bound method on *instance* and
+    attach it.  Returns a new list; the originals are not
+    mutated.
+    """
+    bound = []
+    for cmd in commands:
+        if cmd.callback is not None:
+            bound.append(cmd)
+            continue
+        method = getattr(instance, cmd.name, None)
+        if method is None:
+            bound.append(cmd)
+            continue
+        bound.append(cmd.model_copy(
+            update={'callback': method},
+        ))
+    return bound

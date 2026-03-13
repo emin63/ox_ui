@@ -18,115 +18,14 @@ from pydantic_core import PydanticUndefined
 
 from ox_ui.core.simple_rpc_client import SimpleRPCCall
 from ox_ui.tkdantic.callbacks import TimedCallback
+from ox_ui.tkdantic.introspection import (
+    introspect_field,
+    introspect_model,
+    all_fields_have_defaults as _all_fields_have_defaults,
+    resolve_default as _resolve_default,
+)
 
 LOGGER = _rawLogging.getLogger(__name__)
-
-
-def _resolve_default(field_info):
-    """Extract the effective default from a Pydantic FieldInfo."""
-    if field_info.default is not PydanticUndefined:
-        return field_info.default
-    if field_info.default_factory:
-        return field_info.default_factory()
-    return None
-
-
-def _make_choice_spec(name, annotation, default, help_text):
-    """Build a GUI field spec for a ``Literal[...]`` field."""
-    choices = list(get_args(annotation))
-    return {"name": name, "gui_type": "choice",
-            "choices": [str(c) for c in choices], "default": (
-                str(default) if default is not None else str(choices[0])),
-            "help": help_text}
-
-
-def _make_simple_spec(name, gui_type, default, help_text, nullable=False):
-    """Build a GUI field spec for int / float / str fields."""
-    return {"name": name, "gui_type": gui_type, "default": (
-        str(default) if default is not None else ""), "help": help_text,
-        "nullable": nullable}
-
-
-def introspect_field(name, annotation, field_info):
-    """Convert a single Pydantic field into a GUI field spec dict.
-
-    Returns a dict with keys:
-        name, gui_type, default, choices (for "choice"),
-        model (for "model"/"model_list"),
-        help (optional str from Field(description=...)).
-    """
-    default = _resolve_default(field_info)
-    help_text = field_info.description or ""
-    origin = get_origin(annotation)
-
-    # --- Unwrap Optional[X] (i.e. Union[X, None]) ---
-    nullable = False
-    if origin is Union or (
-            hasattr(types, 'UnionType')
-            and isinstance(annotation, types.UnionType)):
-        args = [a for a in get_args(annotation) if a is not type(None)]
-        if len(args) == 1:
-            annotation = args[0]
-            origin = get_origin(annotation)
-            nullable = True
-
-    # Also mark as nullable if the default is None, even when the
-    # annotation is bare ``float`` (e.g. ``mean: float = Field(default=None)``).
-    if default is None and field_info.default is not PydanticUndefined:
-        nullable = True
-
-    # Literal[...] -> option menu
-    if origin is Literal:
-        return _make_choice_spec(name, annotation, default, help_text)
-
-    # bool (must check before int; bool is subclass of int)
-    if annotation is bool:
-        return {"name": name, "gui_type": "bool", "default": (
-            default if default is not None else True), "help": help_text}
-
-    # int / float / str
-    simple_types = {int: "int", float: "float", str: "str"}
-    if annotation in simple_types:
-        return _make_simple_spec(name, simple_types[annotation],
-                                 default, help_text, nullable=nullable)
-
-    # Nested BaseModel -> sub-frame
-    if (isinstance(annotation, type) and issubclass(annotation, BaseModel)):
-        model_help = (annotation.__doc__ or "").strip()
-        return {"name": name, "gui_type": "model", "model": annotation,
-                "help": model_help}
-
-    # List[BaseModel] -> repeatable sub-frame
-    if origin is list:
-        args = get_args(annotation)
-        if (args and isinstance(args[0], type) and issubclass(
-                args[0], BaseModel)):
-            model_help = (args[0].__doc__ or "").strip()
-            return {"name": name, "gui_type": "model_list",
-                    "model": args[0], "help": model_help}
-
-    # Fallback: treat as string
-    return _make_simple_spec(name, "str", default, help_text,
-                             nullable=nullable)
-
-
-def introspect_model(model_class):
-    """Return a list of GUI field spec dicts for *model_class*."""
-    specs = []
-    hints = get_type_hints(model_class)
-    for field_name, field_info in model_class.model_fields.items():
-        annotation = hints[field_name]
-        specs.append(introspect_field(field_name, annotation, field_info))
-    return specs
-
-
-def _all_fields_have_defaults(model_class) -> bool:
-    """Return True if every field has a default value."""
-    for field_info in model_class.model_fields.values():
-        if field_info.default is PydanticUndefined and (
-                field_info.default_factory is None):
-            return False
-    return True
 
 
 # -------------------------------------------------------------------
