@@ -4,11 +4,13 @@
 import json
 import logging as _rawLogging
 import os
+import types
 from tkinter import filedialog
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext
-from typing import (Callable, get_origin, get_args, Literal, get_type_hints)
+from typing import (Callable, Union, get_origin, get_args, Literal,
+                    get_type_hints)
 
 import click
 from pydantic import BaseModel, ValidationError
@@ -38,10 +40,11 @@ def _make_choice_spec(name, annotation, default, help_text):
             "help": help_text}
 
 
-def _make_simple_spec(name, gui_type, default, help_text):
+def _make_simple_spec(name, gui_type, default, help_text, nullable=False):
     """Build a GUI field spec for int / float / str fields."""
     return {"name": name, "gui_type": gui_type, "default": (
-        str(default) if default is not None else ""), "help": help_text}
+        str(default) if default is not None else ""), "help": help_text,
+        "nullable": nullable}
 
 
 def introspect_field(name, annotation, field_info):
@@ -56,6 +59,22 @@ def introspect_field(name, annotation, field_info):
     help_text = field_info.description or ""
     origin = get_origin(annotation)
 
+    # --- Unwrap Optional[X] (i.e. Union[X, None]) ---
+    nullable = False
+    if origin is Union or (
+            hasattr(types, 'UnionType')
+            and isinstance(annotation, types.UnionType)):
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            annotation = args[0]
+            origin = get_origin(annotation)
+            nullable = True
+
+    # Also mark as nullable if the default is None, even when the
+    # annotation is bare ``float`` (e.g. ``mean: float = Field(default=None)``).
+    if default is None and field_info.default is not PydanticUndefined:
+        nullable = True
+
     # Literal[...] -> option menu
     if origin is Literal:
         return _make_choice_spec(name, annotation, default, help_text)
@@ -69,7 +88,7 @@ def introspect_field(name, annotation, field_info):
     simple_types = {int: "int", float: "float", str: "str"}
     if annotation in simple_types:
         return _make_simple_spec(name, simple_types[annotation],
-                                 default, help_text)
+                                 default, help_text, nullable=nullable)
 
     # Nested BaseModel -> sub-frame
     if (isinstance(annotation, type) and issubclass(annotation, BaseModel)):
@@ -87,7 +106,8 @@ def introspect_field(name, annotation, field_info):
                     "model": args[0], "help": model_help}
 
     # Fallback: treat as string
-    return _make_simple_spec(name, "str", default, help_text)
+    return _make_simple_spec(name, "str", default, help_text,
+                             nullable=nullable)
 
 
 def introspect_model(model_class):
@@ -460,10 +480,23 @@ def collect_values(widgets, path=()):
             spec, var = entry
             raw = var.get()
             gui_type = spec["gui_type"]
+
+            # Empty string on a nullable field -> None
+            if spec.get("nullable") and isinstance(raw, str) and (
+                    raw.strip() == ""):
+                result[name] = None
+                continue
+
             if gui_type == "int":
-                result[name] = int(raw)
+                if isinstance(raw, str) and raw.strip() == "":
+                    result[name] = None
+                else:
+                    result[name] = int(raw)
             elif gui_type == "float":
-                result[name] = float(raw)
+                if isinstance(raw, str) and raw.strip() == "":
+                    result[name] = None
+                else:
+                    result[name] = float(raw)
             elif gui_type == "bool":
                 result[name] = bool(var.get())
             else:
@@ -513,7 +546,7 @@ def load_values(widgets, data):
 
         # Scalar field: entry is (spec, var)
         _spec, var = entry
-        var.set(value)
+        var.set("" if value is None else value)
 
 
 # -------------------------------------------------------------------
@@ -910,4 +943,3 @@ class MainApp(tk.Tk):
         ModelCommandWindow(
             self, command=info, url_var=self._url_var,
             timeout_var=self._timeout_var, max_horizontal=4)
-
