@@ -16,6 +16,13 @@ passed to ``tk.Text.tag_configure``.  Patterns are matched
 using ``re.search`` (via ``re.finditer``), so they can match a
 substring anywhere in a line — the entire line need not match.
 
+If the pattern contains a **capturing group**, only the text
+matched by group 1 is highlighted — the rest of the pattern
+acts as context.  This lets you condition highlighting on the
+surrounding line content without colouring the entire match.
+Patterns with no groups behave as before: the full match is
+highlighted.
+
 When two patterns match overlapping text, the **first** entry
 in the ``highlights`` list wins (highest priority).  The
 auto-bold heading tag always has the *lowest* priority, so
@@ -76,6 +83,22 @@ Example usage::
                           "font": ("Consolas", 10, "bold")}),
         # Underline any time value like "3h 22m".
         (r"\\d+h \\d+m",   {"underline": True}),
+
+        # --- Capturing group examples ---
+        # Highlight only the number after "connections: "
+        # with a blue background, but only when it is
+        # non-zero.  The full pattern matches for context;
+        # only group 1 (the digits) gets tagged.
+        (r"connections: ([1-9]\\d*)",
+         {"background": "lightblue"}),
+        # Highlight a non-zero fill count on a
+        # "fills / cancels / orders:" line.
+        (r"fills / cancels / orders: ([1-9]\\d*)",
+         {"background": "lightblue"}),
+        # Highlight the value after "status: " only when
+        # the line also contains "Database".
+        (r"Database.*status: (\\S+)",
+         {"foreground": "orange"}),
     ]
 
     root = tk.Tk()
@@ -134,10 +157,13 @@ class SimpleStatusDisplay(tk.Toplevel):
         Optional list of ``(pattern, tag_config)`` tuples.
         *pattern* is a regex string matched with
         ``re.finditer`` (substring matches are supported).
-        *tag_config* is a dict of ``tk.Text.tag_configure``
-        keyword arguments (e.g. ``foreground``, ``background``,
-        ``font``, ``underline``).  Earlier entries in the list
-        take priority when patterns overlap.
+        If the pattern contains a capturing group, only
+        group 1 is highlighted; the rest of the pattern
+        serves as context.  *tag_config* is a dict of
+        ``tk.Text.tag_configure`` keyword arguments (e.g.
+        ``foreground``, ``background``, ``font``,
+        ``underline``).  Earlier entries in the list take
+        priority when patterns overlap.
     """
 
     def __init__(
@@ -421,8 +447,13 @@ class SimpleStatusDisplay(tk.Toplevel):
 
         Iterates over every line and, for each highlight rule,
         uses ``re.finditer`` to locate all non-overlapping
-        matches.  Tags are applied so that the first rule in
-        the highlights list has the highest display priority
+        matches.  If the pattern contains a capturing group,
+        only group 1 is tagged; otherwise the full match is
+        tagged.  This lets a pattern use surrounding text as
+        context without highlighting it.
+
+        Tags are applied so that the first rule in the
+        highlights list has the highest display priority
         (configured once in ``_configure_tags``).
 
         After all tags are applied the text area is set back
@@ -433,8 +464,9 @@ class SimpleStatusDisplay(tk.Toplevel):
             tk_line = line_idx + 1  # tk.Text is 1-based
             for pattern, tag_name, _config in self._highlights:
                 for match in pattern.finditer(line):
-                    start = f"{tk_line}.{match.start()}"
-                    end = f"{tk_line}.{match.end()}"
+                    group = 1 if match.lastindex else 0
+                    start = f"{tk_line}.{match.start(group)}"
+                    end = f"{tk_line}.{match.end(group)}"
                     self._text.tag_add(tag_name, start, end)
         self._text.config(state="disabled")
 
