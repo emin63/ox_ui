@@ -60,6 +60,26 @@ Commonly used *tag_config* keys
 ``spacing1`` / ``spacing3``
     Extra vertical space (in pixels) above / below the line.
 
+Click callbacks
+^^^^^^^^^^^^^^^
+
+A highlight rule may include an optional third element — a
+callable that is invoked when the user clicks on tagged text.
+The callable receives two positional arguments:
+
+``line_text``
+    The full text of the line that was clicked.
+
+``match_text``
+    The specific tagged substring that was clicked (i.e. the
+    highlighted portion, which may be a capturing-group
+    sub-match rather than the whole regex match).
+
+When a tag has a callback the mouse cursor automatically
+changes to a hand pointer on hover to signal interactivity.
+If multiple clickable tags overlap, the highest-priority
+tag's callback fires (first rule wins, same as for colours).
+
 Example usage::
 
     import tkinter as tk
@@ -99,6 +119,22 @@ Example usage::
         # the line also contains "Database".
         (r"Database.*status: (\\S+)",
          {"foreground": "orange"}),
+
+        # --- Click callback examples ---
+        # Make "error" clickable; print the full line and
+        # the matched word when clicked.
+        (r"(?i)error",
+         {"foreground": "red", "underline": True},
+         lambda line, match: print(
+             f"Clicked '{match}' on line: {line}"
+         )),
+        # Click a non-zero connection count to trigger
+        # a custom action with full line context.
+        (r"connections: ([1-9]\\d*)",
+         {"background": "lightblue"},
+         lambda line, match: print(
+             f"Connection count {match} clicked"
+         )),
     ]
 
     root = tk.Tk()
@@ -128,7 +164,12 @@ LOGGER = logging.getLogger(__name__)
 StatusList = List[Tuple[str, ...]]
 
 # Type alias for a single highlight rule.
-HighlightRule = Tuple[str, Dict[str, Any]]
+# Two-element form: (pattern, tag_config)
+# Three-element form: (pattern, tag_config, on_click)
+HighlightRule = (
+    Tuple[str, Dict[str, Any]]
+    | Tuple[str, Dict[str, Any], Callable[[str, str], Any]]
+)
 
 # Separator drawn between status items.
 _SEPARATOR = "-" * 40
@@ -154,7 +195,10 @@ class SimpleStatusDisplay(tk.Toplevel):
     update_interval :
         Seconds between automatic refreshes (default 0.2).
     highlights :
-        Optional list of ``(pattern, tag_config)`` tuples.
+        Optional list of highlight rules.  Each rule is a
+        tuple of two or three elements:
+        ``(pattern, tag_config)`` or
+        ``(pattern, tag_config, on_click)``.
         *pattern* is a regex string matched with
         ``re.finditer`` (substring matches are supported).
         If the pattern contains a capturing group, only
@@ -162,7 +206,11 @@ class SimpleStatusDisplay(tk.Toplevel):
         serves as context.  *tag_config* is a dict of
         ``tk.Text.tag_configure`` keyword arguments (e.g.
         ``foreground``, ``background``, ``font``,
-        ``underline``).  Earlier entries in the list take
+        ``underline``).  *on_click*, when provided, is a
+        callable with signature ``(line_text, match_text)``
+        that fires when the user clicks on tagged text.
+        The cursor changes to a hand pointer on hover for
+        clickable tags.  Earlier entries in the list take
         priority when patterns overlap.
     """
 
@@ -200,21 +248,31 @@ class SimpleStatusDisplay(tk.Toplevel):
     # Highlight compilation and tag setup
     # ----------------------------------------------------------
 
+    # Compiled highlight entry: pattern, tag name, config, callback.
+    _CompiledHL = tuple[
+        re.Pattern, str, dict[str, Any],
+        Callable[[str, str], Any] | None,
+    ]
+
     @staticmethod
     def _compile_highlights(
         rules: List[HighlightRule],
-    ) -> list[tuple[re.Pattern, str, dict[str, Any]]]:
+    ) -> list["SimpleStatusDisplay._CompiledHL"]:
         """Compile regex patterns and assign tag names.
 
         Returns a list of ``(compiled_pattern, tag_name,
-        tag_config)`` triples.
+        tag_config, on_click)`` tuples.  *on_click* is
+        ``None`` when the rule has no callback.
         """
-        compiled: list[
-            tuple[re.Pattern, str, dict[str, Any]]
-        ] = []
-        for idx, (pattern, config) in enumerate(rules):
+        compiled: list[SimpleStatusDisplay._CompiledHL] = []
+        for idx, rule in enumerate(rules):
+            pattern = rule[0]
+            config = rule[1]
+            on_click = rule[2] if len(rule) > 2 else None
             tag_name = f"_hl_{idx}"
-            compiled.append((re.compile(pattern), tag_name, config))
+            compiled.append(
+                (re.compile(pattern), tag_name, config, on_click),
+            )
         return compiled
 
     def _configure_tags(self):
@@ -223,22 +281,102 @@ class SimpleStatusDisplay(tk.Toplevel):
         The heading tag gets the lowest priority and each
         highlight tag is raised so that the first entry in
         the *highlights* list has the highest priority.
+        Tags with an *on_click* callback get a click binding
+        and a hand-pointer cursor on hover.
         """
         # Heading tag: bold variant of the base font.
         self._text.tag_configure(
             _HEADING_TAG, font=("Consolas", 10, "bold"),
         )
 
-        for _pattern, tag_name, config in self._highlights:
+        # Store the default cursor so hover-leave restores it.
+        self._default_cursor = self._text.cget("cursor")
+
+        for _pattern, tag_name, config, on_click in (
+            self._highlights
+        ):
             self._text.tag_configure(tag_name, **config)
+            if on_click is not None:
+                self._bind_click(tag_name, on_click)
 
         # Set priority: heading lowest, then highlights in
         # reverse order so index 0 ends up highest.
         self._text.tag_lower(_HEADING_TAG)
-        for _pattern, tag_name, _config in reversed(
+        for _pattern, tag_name, _config, _cb in reversed(
             self._highlights
         ):
             self._text.tag_raise(tag_name)
+
+    def _bind_click(
+        self,
+        tag_name: str,
+        on_click: Callable[[str, str], Any],
+    ):
+        """Bind click and cursor events for a clickable tag.
+
+        On click the callback receives ``(line_text,
+        match_text)`` where *line_text* is the full text of
+        the clicked line and *match_text* is the tagged
+        substring that was clicked.
+        """
+
+        def _handler(event, _cb=on_click, _tag=tag_name):
+            self._on_tag_click(event, _cb, _tag)
+
+        self._text.tag_bind(
+            tag_name, "<Button-1>", _handler,
+        )
+        self._text.tag_bind(
+            tag_name,
+            "<Enter>",
+            lambda _e: self._text.config(cursor="hand2"),
+        )
+        self._text.tag_bind(
+            tag_name,
+            "<Leave>",
+            lambda _e: self._text.config(
+                cursor=self._default_cursor,
+            ),
+        )
+
+    def _on_tag_click(
+        self,
+        event: tk.Event,
+        callback: Callable[[str, str], Any],
+        tag_name: str,
+    ):
+        """Dispatch a click on tagged text to the callback.
+
+        Resolves the full line text and the specific tagged
+        substring under the cursor, then calls
+        ``callback(line_text, match_text)``.
+        """
+        # Index under the mouse, e.g. "4.12".
+        index = self._text.index(f"@{event.x},{event.y}")
+        line_no = index.split(".")[0]
+        line_text = self._text.get(
+            f"{line_no}.0", f"{line_no}.end",
+        )
+
+        # Find the tagged range containing the click.
+        # tag_prevrange looks backwards from the given index
+        # (exclusive), so we step one character forward.
+        tag_range = self._text.tag_prevrange(
+            tag_name, f"{index}+1c",
+        )
+        if tag_range:
+            match_text = self._text.get(*tag_range)
+        else:
+            match_text = ""
+
+        try:
+            callback(line_text, match_text)
+        except Exception:
+            LOGGER.exception(
+                "on_click callback for tag %r raised an "
+                "exception",
+                tag_name,
+            )
 
     def _init_threading(self):
         """Initialise the stop and pause threading events."""
@@ -462,7 +600,9 @@ class SimpleStatusDisplay(tk.Toplevel):
         lines = content.split("\n")
         for line_idx, line in enumerate(lines):
             tk_line = line_idx + 1  # tk.Text is 1-based
-            for pattern, tag_name, _config in self._highlights:
+            for pattern, tag_name, _config, _cb in (
+                self._highlights
+            ):
                 for match in pattern.finditer(line):
                     group = 1 if match.lastindex else 0
                     start = f"{tk_line}.{match.start(group)}"
