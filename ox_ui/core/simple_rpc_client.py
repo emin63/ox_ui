@@ -1,10 +1,12 @@
 """Simple tools for making an RPC client.
 """
 
+from collections.abc import Callable
 import datetime
 from logging import getLogger
 import threading
 import traceback
+from typing import Optional
 import xmlrpc.client
 from xmlrpc.client import Transport
 
@@ -72,7 +74,8 @@ class SimpleRPCCall(threading.Thread):
 
 
     def __init__(self, url, command_name, cmd_args, after=None,
-                 rpc_timeout=30, daemon=True, **kwargs):
+                 rpc_timeout=30, daemon=True,
+                 log_func: Optional[Callable[[str], None]] = None, **kwargs):
         """Initializer.
 
         :param url:  URL of server.
@@ -89,6 +92,10 @@ class SimpleRPCCall(threading.Thread):
 
         :param daemon=True:  Whether the thread is daemonic.
 
+        :param log_func=None:  Optional callable which takes a string
+                               log message. If None, then we use an
+                               internal info logging call.
+
         :param **kwargs:  Passed to threading.Thread.__init__.
 
         """
@@ -99,6 +106,7 @@ class SimpleRPCCall(threading.Thread):
         self.cmd_args = cmd_args
         self.after = after
         self.result = None
+        self.log_func = log_func or LOGGER.info
 
     def run(self):
         """Do RPC call, put result into self.result, and do callback.
@@ -116,8 +124,8 @@ class SimpleRPCCall(threading.Thread):
                 self.result = method(self.cmd_args)
             finish = datetime.datetime.now()
             duration = finish-start
-            LOGGER.info('Finished %s in %s seconds', self.command_name,
-                        duration.total_seconds())
+            msg = f'Did {self.command_name} in {duration.total_seconds()}'
+            self.log_func(msg)
         except Exception:  # pylint: disable=broad-except
             LOGGER.exception('Problem in running command %s',
                              self.command_name)
