@@ -106,18 +106,39 @@ class CollapsibleFrame:
     """
 
     def __init__(self, parent, text="", collapsed=False, padding=6,
-                 tooltip="", **kwargs):
+                 tooltip="", header_menu_items=None, **kwargs):
         self._frame = ttk.Frame(parent, **kwargs)
         self._expanded = not collapsed
         self._base_text = text
 
-        # Toggle button acts as the section header
+        # Header row: toggle on the left, optional ⋯ menu on the right
+        header_row = ttk.Frame(self._frame)
+        header_row.pack(fill="x", anchor="w")
+
         self._toggle_btn = ttk.Button(
-            self._frame, text=self._label_text(),
+            header_row, text=self._label_text(),
             command=self.toggle, style="Toolbutton")
-        self._toggle_btn.pack(fill="x", anchor="w")
+        self._toggle_btn.pack(side="left", fill="x", expand=True)
         if tooltip:
             add_tooltip(self._toggle_btn, tooltip)
+
+        # Optional ⋯ popup menu
+        if header_menu_items:
+            menu = tk.Menu(header_row, tearoff=False)
+            for label, callback in header_menu_items:
+                menu.add_command(label=label, command=callback)
+
+            dots = ttk.Label(
+                header_row, text="\u22EF", cursor="hand2",
+                font=("TkDefaultFont", 10, "bold"),
+                padding=(4, 0),
+            )
+            dots.pack(side="right")
+            dots.bind(
+                "<Button-1>",
+                lambda e: menu.tk_popup(e.x_root, e.y_root),
+            )
+            add_tooltip(dots, "Actions\u2026")
 
         # Inner frame holds the actual child widgets
         self.inner = ttk.Frame(self._frame, padding=padding)
@@ -236,6 +257,69 @@ def _lay_out_scalars(
 # Nested model layout helpers
 # -------------------------------------------------------------------
 
+def _dump_sub_model(model_class, widget_tree_holder, parent_widget):
+    """Validate and save a sub-model's current values to JSON."""
+    widget_tree = widget_tree_holder.get("tree")
+    if widget_tree is None:
+        return
+    try:
+        raw = collect_values(widget_tree)
+    except (ValueError, TypeError) as exc:
+        LOGGER.error("Sub-model dump error: %s", exc)
+        return
+
+    try:
+        instance = model_class.model_validate(raw)
+    except ValidationError as exc:
+        LOGGER.error("Sub-model validation error: %s", exc)
+        return
+
+    path = filedialog.asksaveasfilename(
+        parent=parent_widget,
+        title=f"Dump {model_class.__name__} as JSON",
+        defaultextension=".json",
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+    if not path:
+        return
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(instance.model_dump_json(indent=2))
+    except OSError as exc:
+        LOGGER.error("Sub-model file error: %s", exc)
+
+
+def _load_sub_model(model_class, widget_tree_holder, parent_widget):
+    """Load a sub-model's values from a JSON file."""
+    widget_tree = widget_tree_holder.get("tree")
+    if widget_tree is None:
+        return
+
+    path = filedialog.askopenfilename(
+        parent=parent_widget,
+        title=f"Load {model_class.__name__} from JSON",
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+    if not path:
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.error("Sub-model load error: %s", exc)
+        return
+
+    try:
+        model_class.model_validate(data)
+    except ValidationError as exc:
+        LOGGER.warning("Sub-model validation warning: %s", exc)
+
+    try:
+        load_values(widget_tree, data)
+    except (ValueError, TypeError, KeyError) as exc:
+        LOGGER.error("Sub-model load error: %s", exc)
+
+
 def _place_nested_model(parent: ttk.Frame, spec: dict, *, row: int,
                         columnspan: int, max_horizontal: int) -> tuple:
     """Create a :class:`CollapsibleFrame` for a sub-model.
@@ -248,14 +332,27 @@ def _place_nested_model(parent: ttk.Frame, spec: dict, *, row: int,
         spec.get("help", "")
         or (sub_model.__doc__ or "").strip()
     )
+
+    # The widget tree is built *after* the frame, so we use a mutable
+    # holder that the button callbacks close over.
+    holder = {}
+    header_menu_items = [
+        (f"Load {sub_model.__name__} from JSON\u2026",
+         lambda: _load_sub_model(sub_model, holder, parent)),
+        (f"Dump {sub_model.__name__} to JSON\u2026",
+         lambda: _dump_sub_model(sub_model, holder, parent)),
+    ]
+
     child_frame = CollapsibleFrame(
         parent, text=sub_model.__name__,
         collapsed=_all_fields_have_defaults(sub_model),
-        padding=6, tooltip=model_doc)
+        padding=6, tooltip=model_doc,
+        header_menu_items=header_menu_items)
     child_frame.grid(row=row, column=0, columnspan=columnspan,
                      sticky="ew", pady=4)
     sub_widgets = build_fields_in_frame(
         child_frame.inner, sub_specs, max_horizontal=max_horizontal)
+    holder["tree"] = sub_widgets
     return _MODEL_TAG, sub_widgets
 
 
@@ -492,6 +589,26 @@ class _LegSection:
         self._count_label = ttk.Label(btn_row, text="")
         self._count_label.pack(side="left", padx=8)
 
+        # List-level ⋯ menu (right side)
+        list_menu = tk.Menu(btn_row, tearoff=False)
+        list_menu.add_command(
+            label=f"Load {model_class.__name__} list from JSON\u2026",
+            command=self._load_list)
+        list_menu.add_command(
+            label=f"Dump {model_class.__name__} list to JSON\u2026",
+            command=self._dump_list)
+        dots = ttk.Label(
+            btn_row, text="\u22EF", cursor="hand2",
+            font=("TkDefaultFont", 10, "bold"),
+            padding=(4, 0),
+        )
+        dots.pack(side="right")
+        dots.bind(
+            "<Button-1>",
+            lambda e: list_menu.tk_popup(e.x_root, e.y_root),
+        )
+        add_tooltip(dots, "List actions\u2026")
+
         self._container = ttk.Frame(self._outer)
         self._container.pack(fill="x")
 
@@ -507,6 +624,19 @@ class _LegSection:
         model_doc = (
             self.model_class.__doc__ or ""
         ).strip()
+
+        # Per-leg Load / Dump: use a holder so callbacks work
+        # even though the widget tree is built after the frame.
+        holder = {}
+        header_menu_items = [
+            (f"Load this {self.model_class.__name__} from JSON\u2026",
+             lambda h=holder: _load_sub_model(
+                 self.model_class, h, self._container)),
+            (f"Dump this {self.model_class.__name__} to JSON\u2026",
+             lambda h=holder: _dump_sub_model(
+                 self.model_class, h, self._container)),
+        ]
+
         frame = CollapsibleFrame(
             self._container,
             text=f"{self.model_class.__name__} #{idx}",
@@ -515,6 +645,7 @@ class _LegSection:
             ),
             padding=4,
             tooltip=model_doc,
+            header_menu_items=header_menu_items,
         )
         frame.pack(fill="x", pady=2)
         specs = introspect_model(self.model_class)
@@ -522,6 +653,7 @@ class _LegSection:
             frame.inner, specs,
             max_horizontal=self._max_horizontal,
         )
+        holder["tree"] = widget_tree
         self._legs.append((frame, widget_tree))
         self._update_count()
 
@@ -547,6 +679,74 @@ class _LegSection:
             self._add_leg()
             _, widget_tree = self._legs[-1]
             load_values(widget_tree, item)
+
+    # -- List-level Dump / Load ---------------------------------
+
+    def _dump_list(self):
+        """Validate and save the entire list as a JSON file."""
+        try:
+            raw_items = self.collect_all()
+        except (ValueError, TypeError) as exc:
+            LOGGER.error("List dump error: %s", exc)
+            return
+
+        validated = []
+        for item in raw_items:
+            try:
+                validated.append(
+                    self.model_class.model_validate(item))
+            except ValidationError as exc:
+                LOGGER.error("List validation error: %s", exc)
+                return
+
+        path = filedialog.asksaveasfilename(
+            parent=self._container,
+            title=f"Dump {self.model_class.__name__} list as JSON",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"),
+                       ("All files", "*.*")])
+        if not path:
+            return
+
+        try:
+            data = [v.model_dump() for v in validated]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+        except OSError as exc:
+            LOGGER.error("List dump file error: %s", exc)
+
+    def _load_list(self):
+        """Load a JSON array to replace all current legs."""
+        path = filedialog.askopenfilename(
+            parent=self._container,
+            title=f"Load {self.model_class.__name__} list from JSON",
+            filetypes=[("JSON files", "*.json"),
+                       ("All files", "*.*")])
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.error("List load error: %s", exc)
+            return
+
+        if not isinstance(data, list):
+            LOGGER.error("Expected a JSON array for list load")
+            return
+
+        for item in data:
+            try:
+                self.model_class.model_validate(item)
+            except ValidationError as exc:
+                LOGGER.warning(
+                    "List item validation warning: %s", exc)
+
+        try:
+            self.load_all(data)
+        except (ValueError, TypeError, KeyError) as exc:
+            LOGGER.error("List load error: %s", exc)
 
 
 # -------------------------------------------------------------------

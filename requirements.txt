@@ -4,3 +4,4 @@ flask
 flask-wtf
 wrapt
 click
+pytransitions
