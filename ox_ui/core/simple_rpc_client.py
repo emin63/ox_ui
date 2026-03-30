@@ -31,7 +31,7 @@ class TimeoutTransport(Transport):
         return conn
 
 
-def get_proxy(url, *args, timeout=30, **kwargs):
+def get_proxy(url, *args, timeout=30, use_builtin_types=True, **kwargs):
     """Return xmlrpc.client.ServerProxy using given timeout in transport.
 
     :param url:   URL to connect to.
@@ -54,12 +54,14 @@ def get_proxy(url, *args, timeout=30, **kwargs):
               setup by caching proxies.
 
     """
-    key = f"{url}_{timeout}_{args=}_{kwargs=}"
+    key = f"{url}_{timeout}_{args=}_{kwargs=}_{use_builtin_types=}"
     if not hasattr(THREAD_LOCALS, 'proxies'):
         THREAD_LOCALS.proxies = {}
     if key not in THREAD_LOCALS.proxies:
         THREAD_LOCALS.proxies[key] = xmlrpc.client.ServerProxy(
-            url, *args, transport=TimeoutTransport(timeout=timeout), **kwargs
+            url, *args, transport=TimeoutTransport(
+                timeout=timeout, use_builtin_types=use_builtin_types),
+            **kwargs
         )
     return THREAD_LOCALS.proxies[key]
 
@@ -114,7 +116,8 @@ class SimpleRPCCall(threading.Thread):
         try:
             start = datetime.datetime.now()
             proxy = get_proxy(
-                self.url, timeout=self.rpc_timeout, allow_none=True)
+                self.url, timeout=self.rpc_timeout, allow_none=True,
+                use_builtin_types=True)
             method = getattr(proxy, self.command_name)
             if isinstance(self.cmd_args, list):
                 self.result = method(*self.cmd_args)
