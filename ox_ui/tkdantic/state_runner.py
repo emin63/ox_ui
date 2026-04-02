@@ -31,6 +31,7 @@ Usage (embedded with existing Tk root)::
 """
 
 import datetime
+import json
 import logging
 import os
 import threading
@@ -40,10 +41,17 @@ from typing import Optional
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 
+from pydantic import ValidationError
+
 from ox_ui.tkdantic.builder import (
     CollapsibleFrame,
     add_tooltip,
+    build_fields_in_frame,
+    collect_values,
+    load_values,
 )
+from ox_ui.tkdantic.callbacks import SimpleCallback
+from ox_ui.tkdantic.introspection import introspect_model
 from ox_ui.tkdantic.runnable import RunnableMachine
 
 LOGGER = logging.getLogger(__name__)
@@ -325,11 +333,14 @@ class StateRunnerWindow(tk.Toplevel):
         self._build_button_frame()
         self._build_progress_bar()
         self._build_status_pane()
+        self._build_state_variables_frame()
         self._build_parameters_frame()
 
         self._refresh_state_display()
         self._refresh_trigger_dropdown()
         self._set_controls_idle()
+
+        self._register_state_variable_callback()
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self._poll()
@@ -512,6 +523,289 @@ class StateRunnerWindow(tk.Toplevel):
         browse.pack(side='left', padx=(4, 0))
 
     # =============================================================
+    # State variables panel
+    # =============================================================
+
+    def _build_state_variables_frame(self) -> None:
+        """Create the state variables panel if applicable.
+
+        If the runnable's ``get_state_variables()`` returns
+        ``None``, no panel is created.  Otherwise a
+        :class:`CollapsibleFrame` is built with introspected
+        fields, Apply / Refresh buttons, and optional
+        Dump / Load menu actions.
+        """
+        self._has_state_vars = False
+        self._vars_widget_tree = None
+        self._vars_model_class = None
+
+        state_vars = self._runner.runnable.get_state_variables()
+        if state_vars is None:
+            return
+
+        self._has_state_vars = True
+        self._vars_model_class = type(state_vars)
+
+        header_menu_items = [
+            ('Load variables from JSON\u2026',
+             self._on_load_variables),
+            ('Dump variables to JSON\u2026',
+             self._on_dump_variables),
+        ]
+
+        self._vars_collapse = CollapsibleFrame(
+            self, text='State Variables',
+            collapsed=False, padding=6,
+            header_menu_items=header_menu_items,
+        )
+        self._vars_collapse.pack(
+            fill='x', padx=8, pady=(4, 4),
+        )
+        inner = self._vars_collapse.inner
+
+        # --- form fields ---
+        self._vars_fields_frame = ttk.Frame(inner)
+        self._vars_fields_frame.pack(fill='x')
+
+        specs = introspect_model(self._vars_model_class)
+        self._vars_widget_tree = build_fields_in_frame(
+            self._vars_fields_frame, specs,
+            max_horizontal=4,
+        )
+
+        # Populate with current values
+        load_values(
+            self._vars_widget_tree, state_vars.model_dump(),
+        )
+
+        # --- buttons ---
+        btn_frame = ttk.Frame(inner, padding=(0, 4, 0, 0))
+        btn_frame.pack(fill='x')
+
+        self._apply_vars_btn = ttk.Button(
+            btn_frame, text='Apply',
+            command=self._on_apply_variables,
+        )
+        self._apply_vars_btn.pack(side='left')
+        add_tooltip(
+            self._apply_vars_btn,
+            'Validate and apply the variable values to '
+            'the state machine.',
+        )
+
+        self._refresh_vars_btn = ttk.Button(
+            btn_frame, text='Refresh',
+            command=self._refresh_state_variables,
+        )
+        self._refresh_vars_btn.pack(
+            side='left', padx=(4, 0),
+        )
+        add_tooltip(
+            self._refresh_vars_btn,
+            'Reload current variable values from the '
+            'state machine.',
+        )
+
+        self._vars_status_label = ttk.Label(
+            btn_frame, text='',
+        )
+        self._vars_status_label.pack(
+            side='left', padx=(8, 0),
+        )
+
+    def _refresh_state_variables(self) -> None:
+        """Reload variable form from the machine's snapshot."""
+        if not self._has_state_vars:
+            return
+        state_vars = (
+            self._runner.runnable.get_state_variables()
+        )
+        if state_vars is None:
+            return
+        load_values(
+            self._vars_widget_tree,
+            state_vars.model_dump(),
+        )
+        LOGGER.debug('State variables refreshed in GUI.')
+
+    def _on_apply_variables(self) -> None:
+        """Validate form values and push to the machine."""
+        if not self._has_state_vars:
+            return
+
+        try:
+            raw = collect_values(self._vars_widget_tree)
+        except (ValueError, TypeError) as exc:
+            self._vars_status_label.config(
+                text=f'Input error: {exc}',
+            )
+            return
+
+        try:
+            model = self._vars_model_class.model_validate(raw)
+        except ValidationError as exc:
+            self._vars_status_label.config(
+                text=f'Validation error: {exc}',
+            )
+            return
+
+        self._runner.runnable.set_state_variables(model)
+        self._vars_status_label.config(text='Applied.')
+
+    def _on_dump_variables(self) -> None:
+        """Save current variable form values to a JSON file."""
+        if not self._has_state_vars:
+            return
+
+        try:
+            raw = collect_values(self._vars_widget_tree)
+        except (ValueError, TypeError) as exc:
+            self._vars_status_label.config(
+                text=f'Input error: {exc}',
+            )
+            return
+
+        try:
+            model = self._vars_model_class.model_validate(raw)
+        except ValidationError as exc:
+            self._vars_status_label.config(
+                text=f'Validation error: {exc}',
+            )
+            return
+
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title='Save state variables as JSON',
+            defaultextension='.json',
+            filetypes=[
+                ('JSON files', '*.json'),
+                ('All files', '*.*'),
+            ],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write(model.model_dump_json(indent=2))
+            self._vars_status_label.config(
+                text=f'Saved to {path}',
+            )
+        except OSError as exc:
+            self._vars_status_label.config(
+                text=f'File error: {exc}',
+            )
+
+    def _on_load_variables(self) -> None:
+        """Load variable values from a JSON file into the form."""
+        if not self._has_state_vars:
+            return
+
+        path = filedialog.askopenfilename(
+            parent=self,
+            title='Load state variables from JSON',
+            filetypes=[
+                ('JSON files', '*.json'),
+                ('All files', '*.*'),
+            ],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            self._vars_status_label.config(
+                text=f'Load error: {exc}',
+            )
+            return
+
+        try:
+            self._vars_model_class.model_validate(data)
+        except ValidationError as exc:
+            self._vars_status_label.config(
+                text=f'Validation warning: {exc}',
+            )
+            # Continue anyway — fill what we can.
+
+        try:
+            load_values(self._vars_widget_tree, data)
+            self._vars_status_label.config(
+                text=f'Loaded from {path}',
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            self._vars_status_label.config(
+                text=f'Load error: {exc}',
+            )
+
+    # --- enable / disable variable widgets ---------------------
+
+    def _set_variable_controls_enabled(
+        self, enabled: bool,
+    ) -> None:
+        """Enable or disable the variable form and Apply button.
+
+        The Refresh button is always left enabled so the user
+        can inspect current values even during a transition.
+        """
+        if not self._has_state_vars:
+            return
+        state = 'normal' if enabled else 'disabled'
+        self._apply_vars_btn.config(state=state)
+        self._set_children_state(
+            self._vars_fields_frame, state,
+        )
+
+    @staticmethod
+    def _set_children_state(
+        widget: tk.Widget, state: str,
+    ) -> None:
+        """Recursively set *state* on all descendants."""
+        for child in widget.winfo_children():
+            try:
+                child.configure(state=state)
+            except tk.TclError:
+                pass
+            StateRunnerWindow._set_children_state(
+                child, state,
+            )
+
+    # --- state-changed callback registration -------------------
+
+    _CALLBACK_KEY = '_state_runner_gui'
+
+    def _register_state_variable_callback(self) -> None:
+        """Register a callback to refresh the form on changes.
+
+        Uses ``widget.after(0, ...)`` so the actual tkinter
+        update is always scheduled on the main thread,
+        regardless of which thread fires the callback.
+        """
+        if not self._has_state_vars:
+            return
+        runnable = self._runner.runnable
+        if not hasattr(runnable, 'add_state_changed_callback'):
+            return
+        runnable.add_state_changed_callback(
+            self._CALLBACK_KEY,
+            SimpleCallback(
+                function=lambda: self.after(
+                    0, self._refresh_state_variables,
+                ),
+            ),
+        )
+
+    def _deregister_state_variable_callback(self) -> None:
+        """Remove the GUI callback on window close."""
+        runnable = self._runner.runnable
+        if not hasattr(runnable, 'remove_state_changed_callback'):
+            return
+        runnable.remove_state_changed_callback(
+            self._CALLBACK_KEY,
+        )
+
+    # =============================================================
     # UI update helpers
     # =============================================================
 
@@ -593,11 +887,13 @@ class StateRunnerWindow(tk.Toplevel):
         self._pause_btn.config(state='normal')
         self._resume_btn.config(state='disabled')
         self._cancel_btn.config(state='normal')
+        self._set_variable_controls_enabled(False)
 
     def _set_controls_paused(self) -> None:
         """Switch pause to disabled, resume to enabled."""
         self._pause_btn.config(state='disabled')
         self._resume_btn.config(state='normal')
+        self._set_variable_controls_enabled(True)
 
     def _set_controls_idle(self) -> None:
         """Enable trigger controls; disable pause/resume."""
@@ -608,6 +904,7 @@ class StateRunnerWindow(tk.Toplevel):
         self._pause_btn.config(state='disabled')
         self._resume_btn.config(state='disabled')
         self._cancel_btn.config(state='disabled')
+        self._set_variable_controls_enabled(True)
 
     # =============================================================
     # Button callbacks
@@ -628,6 +925,7 @@ class StateRunnerWindow(tk.Toplevel):
         """Request a pause."""
         self._runner.request_pause()
         self._set_controls_paused()
+        self._refresh_state_variables()
 
     def _on_resume(self) -> None:
         """Request a resume."""
@@ -786,6 +1084,7 @@ class StateRunnerWindow(tk.Toplevel):
         self._refresh_state_display()
         self._refresh_trigger_dropdown()
         self._set_controls_idle()
+        self._refresh_state_variables()
 
     def _schedule_next_poll(self) -> None:
         """Schedule the next poll with the configured interval."""
@@ -803,6 +1102,7 @@ class StateRunnerWindow(tk.Toplevel):
 
     def _on_close(self) -> None:
         """Handle window close: clean up resources."""
+        self._deregister_state_variable_callback()
         self._close_log_file()
         self.destroy()
 

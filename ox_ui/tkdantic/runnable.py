@@ -46,7 +46,10 @@ import logging
 import threading
 from typing import Any, Optional, Protocol, runtime_checkable
 
+from pydantic import BaseModel
 from transitions import Machine
+
+from ox_ui.tkdantic.callbacks import SimpleCallback
 
 LOGGER = logging.getLogger(__name__)
 
@@ -97,6 +100,28 @@ class RunnableMachine(Protocol):
         """Return current human-readable status string."""
         ...
 
+    def get_state_variables(self) -> Optional[BaseModel]:
+        """Return a snapshot of the current state variables.
+
+        Returns a pydantic model instance representing the
+        current configurable state, or ``None`` if this machine
+        has no user-configurable variables.
+
+        The returned instance is a **snapshot**; callers should
+        not mutate it.
+        """
+        ...
+
+    def set_state_variables(self, variables: BaseModel) -> None:
+        """Replace the current state variables wholesale.
+
+        Callers should only invoke this when the machine is
+        idle or paused.
+
+        :param variables: validated pydantic model instance.
+        """
+        ...
+
 
 # -------------------------------------------------------------------
 # Helper base class
@@ -128,6 +153,14 @@ class RunnableMachineHelper:
         self._progress: Optional[float] = None
         self._status_text: str = ''
         self._status_before_pause: str = ''
+
+        # State variables: user-configurable pydantic model.
+        self._state_vars: Optional[BaseModel] = None
+
+        # Callbacks fired when state variables change.
+        self._callbacks_lock = threading.Lock()
+        self._state_changed_callbacks: dict[
+            str, SimpleCallback] = {}
 
     # --- abstract (must override) --------------------------------
 
@@ -230,3 +263,86 @@ class RunnableMachineHelper:
         with self._state_lock:
             self._progress = None
             self._status_text = ''
+
+    # --- state variables -----------------------------------------
+
+    def get_state_variables(self) -> Optional[BaseModel]:
+        """Return a deep copy of the current state variables.
+
+        Returns ``None`` if this machine has no user-configurable
+        variables (the default).  The returned instance is a
+        **snapshot**; callers should not mutate it.
+        """
+        if self._state_vars is None:
+            return None
+        return self._state_vars.model_copy(deep=True)
+
+    def set_state_variables(
+        self, variables: BaseModel,
+    ) -> None:
+        """Replace the current state variables wholesale.
+
+        A deep copy of *variables* is stored so the caller
+        retains no shared reference.  After storing, all
+        registered state-changed callbacks are executed.
+
+        Callers should only invoke this when the machine is
+        idle or paused.
+
+        :param variables: validated pydantic model instance.
+        """
+        self._state_vars = variables.model_copy(deep=True)
+        self.execute_state_changed_callbacks()
+
+    # --- state-changed callbacks ---------------------------------
+
+    def add_state_changed_callback(
+        self, name: str, callback: SimpleCallback,
+    ) -> None:
+        """Register a named callback for state-variable changes.
+
+        If *name* already exists it is replaced.
+
+        :param name: unique key for this callback.
+        :param callback: :class:`SimpleCallback` to invoke.
+        """
+        with self._callbacks_lock:
+            self._state_changed_callbacks[name] = callback
+
+    def remove_state_changed_callback(self, name: str) -> None:
+        """Remove a previously registered callback by name.
+
+        Silently ignores unknown names.
+
+        :param name: the key passed to
+            :meth:`add_state_changed_callback`.
+        """
+        with self._callbacks_lock:
+            self._state_changed_callbacks.pop(name, None)
+
+    def execute_state_changed_callbacks(self) -> None:
+        """Run all registered state-changed callbacks.
+
+        The callback dict is snapshotted under the lock and
+        then released **before** any callback executes.  This
+        prevents deadlocks when a callback calls
+        :meth:`get_state_variables` or registers / removes
+        other callbacks.
+
+        Exceptions in individual callbacks are logged and
+        do not prevent remaining callbacks from running.
+        """
+        with self._callbacks_lock:
+            snapshot = list(
+                self._state_changed_callbacks.values(),
+            )
+        for cb in snapshot:
+            try:
+                cb.function(
+                    *(cb.args or []),
+                    **(cb.kwargs or {}),
+                )
+            except Exception:
+                LOGGER.exception(
+                    'Error in state-changed callback.',
+                )
