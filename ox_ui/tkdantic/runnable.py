@@ -152,6 +152,7 @@ class RunnableMachineHelper:
         self._state_lock = threading.Lock()
         self._progress: Optional[float] = None
         self._status_text: str = ''
+        self._status_headers: dict[str, str] = {}
         self._status_before_pause: str = ''
 
         # State variables: user-configurable pydantic model.
@@ -211,9 +212,16 @@ class RunnableMachineHelper:
             return self._progress
 
     def get_status_text(self) -> str:
-        """Return the current status string."""
+        """Return headers (if any) followed by the current status.
+
+        The returned string is for display only; headers and the
+        raw status text are stored separately.
+        """
         with self._state_lock:
-            return self._status_text
+            parts = list(self._status_headers.values())
+            if self._status_text:
+                parts.append(self._status_text)
+            return '\n'.join(parts)
 
     def set_progress(self, value: Optional[float]) -> None:
         """Set progress.  Call from pytransitions callbacks.
@@ -224,12 +232,52 @@ class RunnableMachineHelper:
             self._progress = value
 
     def set_status(self, text: str) -> None:
-        """Set status text.  Call from pytransitions callbacks.
+        """Set the raw status text.  Call from pytransitions callbacks.
+
+        This replaces only the raw portion; status headers are
+        unaffected.
 
         :param text: human-readable status message.
         """
         with self._state_lock:
             self._status_text = text
+
+    def append_status(self, text: str) -> None:
+        """Append to the raw status text.
+
+        Useful when a callback wants to add detail without
+        overwriting what is already there.
+
+        :param text: text to append (a newline is prepended
+            automatically if the raw status is non-empty).
+        """
+        with self._state_lock:
+            if self._status_text:
+                self._status_text += '\n' + text
+            else:
+                self._status_text = text
+
+    def add_status_header(self, name: str, text: str) -> None:
+        """Add or replace a named status header.
+
+        Headers are displayed above the raw status text by
+        :meth:`get_status_text`.
+
+        :param name: unique key for this header.
+        :param text: header text to display.
+        """
+        with self._state_lock:
+            self._status_headers[name] = text
+
+    def remove_status_header(self, name: str) -> None:
+        """Remove a status header by name.
+
+        Silently ignores unknown names.
+
+        :param name: key passed to :meth:`add_status_header`.
+        """
+        with self._state_lock:
+            self._status_headers.pop(name, None)
 
     # --- worker-thread helpers -----------------------------------
 
@@ -237,11 +285,13 @@ class RunnableMachineHelper:
         """Block until resumed.  Call inside long-running loops.
 
         Updates the status text to indicate a paused state and
-        restores the previous status on resume.
+        restores the previous raw status on resume.  Status
+        headers are not affected.
         """
         if self._pause_event.is_set():
             return
-        previous = self.get_status_text()
+        with self._state_lock:
+            previous = self._status_text
         self.set_status('Paused.')
         LOGGER.debug('Worker paused.')
         self._pause_event.wait()
@@ -263,6 +313,7 @@ class RunnableMachineHelper:
         with self._state_lock:
             self._progress = None
             self._status_text = ''
+            self._status_headers.clear()
 
     # --- state variables -----------------------------------------
 
