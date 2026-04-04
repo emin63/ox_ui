@@ -11,7 +11,8 @@ with at least these keys::
     {
         "name":     str,   # field name
         "gui_type": str,   # "str" | "int" | "float" | "bool"
-                           #   | "choice" | "model" | "model_list"
+                           #   | "choice" | "filepath"
+                           #   | "model" | "model_list"
         "default":  ...,   # resolved default value (may be "")
         "help":     str,   # description from Field(description=...)
     }
@@ -22,8 +23,13 @@ Additional keys appear for specific types:
 *   ``model``  — the ``BaseModel`` subclass
     (for ``"model"`` and ``"model_list"``).
 *   ``nullable`` — ``True`` when the field accepts ``None``.
+*   ``mode``   — ``"save"`` or ``"open"`` (for ``"filepath"``).
+*   ``filetypes`` — list of (label, pattern) tuples
+    (for ``"filepath"``).
+*   ``defaultextension`` — e.g. ``".csv"`` (for ``"filepath"``).
 """
 
+import pathlib
 import types
 from typing import (
     Literal,
@@ -89,6 +95,36 @@ def _make_simple_spec(
     }
 
 
+def _make_filepath_spec(name, default, help_text, field_info,
+                        nullable=False):
+    """Build a field spec for a ``pathlib.Path`` field.
+
+    Dialog hints (``mode``, ``filetypes``, ``defaultextension``)
+    are pulled from ``field_info.json_schema_extra`` when present.
+    The conservative default is ``mode="save"`` so the user can
+    type a path that does not yet exist.
+    """
+    extras = {}
+    if isinstance(field_info.json_schema_extra, dict):
+        extras = field_info.json_schema_extra
+
+    return {
+        "name": name,
+        "gui_type": "filepath",
+        "default": (
+            str(default) if default is not None else ""
+        ),
+        "help": help_text,
+        "nullable": nullable,
+        "mode": extras.get("mode", "save"),
+        "filetypes": extras.get(
+            "filetypes",
+            [("All files", "*.*")],
+        ),
+        "defaultextension": extras.get("defaultextension", ""),
+    }
+
+
 # -----------------------------------------------------------
 # Single-field introspection
 # -----------------------------------------------------------
@@ -120,8 +156,8 @@ def introspect_field(name, annotation, field_info):
 
     Returns a dict with keys documented in the module
     docstring.  Handles ``Optional``, ``Literal``, ``bool``,
-    ``int``, ``float``, ``str``, nested ``BaseModel``, and
-    ``List[BaseModel]``.
+    ``int``, ``float``, ``str``, ``pathlib.Path``,
+    nested ``BaseModel``, and ``List[BaseModel]``.
     """
     default = resolve_default(field_info)
     help_text = field_info.description or ""
@@ -160,6 +196,15 @@ def introspect_field(name, annotation, field_info):
         return _make_simple_spec(
             name, simple_types[annotation],
             default, help_text, nullable=nullable,
+        )
+
+    # pathlib.Path / PurePath → file browser
+    if isinstance(annotation, type) and issubclass(
+        annotation, pathlib.PurePath,
+    ):
+        return _make_filepath_spec(
+            name, default, help_text, field_info,
+            nullable=nullable,
         )
 
     # Nested BaseModel → sub-model

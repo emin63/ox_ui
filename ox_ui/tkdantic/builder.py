@@ -211,6 +211,35 @@ def _place_scalar_widget(parent, spec, *, row, label_col, widget_col,
         chk.grid(row=row, column=widget_col,
                  sticky="w", pady=2, padx=(0, 8))
 
+    elif gui_type == "filepath":
+        var = tk.StringVar(value=spec.get("default", ""))
+        width = 15 if compact else 32
+        cell = ttk.Frame(parent)
+        cell.grid(row=row, column=widget_col,
+                  sticky="ew", pady=2, padx=(0, 8))
+        entry = ttk.Entry(cell, textvariable=var, width=width)
+        entry.pack(side="left", fill="x", expand=True)
+
+        mode = spec.get("mode", "save")
+        filetypes = spec.get("filetypes", [("All files", "*.*")])
+        defaultext = spec.get("defaultextension", "")
+
+        def _browse(_var=var, _mode=mode, _ft=filetypes,
+                    _de=defaultext):
+            if _mode == "open":
+                path = filedialog.askopenfilename(
+                    parent=parent, filetypes=_ft)
+            else:
+                path = filedialog.asksaveasfilename(
+                    parent=parent, filetypes=_ft,
+                    defaultextension=_de)
+            if path:
+                _var.set(path)
+
+        btn = ttk.Button(cell, text="Browse\u2026", command=_browse,
+                         width=8)
+        btn.pack(side="left", padx=(4, 0))
+
     else:  # str, int, float
         var = tk.StringVar(value=spec.get("default", ""))
         width = 15 if compact else 32
