@@ -12,6 +12,7 @@ with at least these keys::
         "name":     str,   # field name
         "gui_type": str,   # "str" | "int" | "float" | "bool"
                            #   | "choice" | "filepath"
+                           #   | "scalar_list"
                            #   | "model" | "model_list"
         "default":  ...,   # resolved default value (may be "")
         "help":     str,   # description from Field(description=...)
@@ -27,6 +28,8 @@ Additional keys appear for specific types:
 *   ``filetypes`` — list of (label, pattern) tuples
     (for ``"filepath"``).
 *   ``defaultextension`` — e.g. ``".csv"`` (for ``"filepath"``).
+*   ``inner_type`` — ``"str"``, ``"int"``, or ``"float"``
+    (for ``"scalar_list"``).
 """
 
 import pathlib
@@ -125,6 +128,30 @@ def _make_filepath_spec(name, default, help_text, field_info,
     }
 
 
+_SCALAR_LIST_TYPES = {int: "int", float: "float", str: "str"}
+
+
+def _make_scalar_list_spec(name, inner_type, default, help_text,
+                           nullable=False):
+    """Build a field spec for a ``List[scalar]`` field.
+
+    *inner_type* is the element type (``str``, ``int``, ``float``).
+    Unrecognised element types fall back to ``str``.
+    """
+    inner_name = _SCALAR_LIST_TYPES.get(inner_type, "str")
+    default_lines = ""
+    if isinstance(default, list):
+        default_lines = "\n".join(str(v) for v in default)
+    return {
+        "name": name,
+        "gui_type": "scalar_list",
+        "inner_type": inner_name,
+        "default": default_lines,
+        "help": help_text,
+        "nullable": nullable,
+    }
+
+
 # -----------------------------------------------------------
 # Single-field introspection
 # -----------------------------------------------------------
@@ -157,7 +184,8 @@ def introspect_field(name, annotation, field_info):
     Returns a dict with keys documented in the module
     docstring.  Handles ``Optional``, ``Literal``, ``bool``,
     ``int``, ``float``, ``str``, ``pathlib.Path``,
-    nested ``BaseModel``, and ``List[BaseModel]``.
+    nested ``BaseModel``, ``List[BaseModel]``, and
+    ``List[scalar]``.
     """
     default = resolve_default(field_info)
     help_text = field_info.description or ""
@@ -220,12 +248,13 @@ def introspect_field(name, annotation, field_info):
         }
 
     # List[BaseModel] → repeatable sub-model
+    # List[scalar]    → multi-line scalar list
     if origin is list:
         args = get_args(annotation)
-        if (
-            args
-            and isinstance(args[0], type)
-            and issubclass(args[0], BaseModel)
+        if not args:
+            pass  # untyped List, fall through to str
+        elif isinstance(args[0], type) and issubclass(
+            args[0], BaseModel,
         ):
             model_help = (args[0].__doc__ or "").strip()
             return {
@@ -234,6 +263,13 @@ def introspect_field(name, annotation, field_info):
                 "model": args[0],
                 "help": model_help,
             }
+        else:
+            # List of a scalar type (str, int, float, etc.)
+            inner = args[0]
+            return _make_scalar_list_spec(
+                name, inner, default, help_text,
+                nullable=nullable,
+            )
 
     # Fallback: treat as string
     return _make_simple_spec(
