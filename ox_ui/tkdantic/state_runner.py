@@ -58,6 +58,21 @@ LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_UPDATE_MS = 500
 
+# Accent color presets for the window banner.  Keys are the labels
+# shown in the Parameters OptionMenu; values are hex colors used as
+# the swatch background.  'None' disables the accent (no swatch).
+_ACCENT_NONE = 'None'
+_ACCENT_PRESETS: dict = {
+    _ACCENT_NONE: None,
+    'Red':    '#d64545',
+    'Orange': '#e08e3c',
+    'Yellow': '#e6c84a',
+    'Green':  '#4ea84e',
+    'Blue':   '#3f7fd6',
+    'Purple': '#8759c4',
+    'Gray':   '#808080',
+}
+
 
 # -------------------------------------------------------------------
 # Status text formatting hook
@@ -313,16 +328,29 @@ class StateRunnerWindow(tk.Toplevel):
         runner: StateRunner,
         title: str = 'State Runner',
         on_close_callback: Optional[Callable] = None,
+        nickname: Optional[str] = None,
+        accent_color: Optional[str] = None,
     ):
         """Create the state runner GUI.
 
         :param parent: parent tkinter widget.
         :param runner: the StateRunner to drive.
-        :param title: window title string.
+        :param title: window title string.  Used as the base OS
+            window title; if *nickname* is also set, the OS title
+            becomes ``"<nickname> \u2014 <title>"``.
+        :param on_close_callback: optional callback invoked after
+            the window is destroyed.
+        :param nickname: optional short name shown in a banner
+            above the state frame, and prepended to the OS title
+            to help distinguish multiple open windows.
+        :param accent_color: optional accent preset name (a key
+            of :data:`_ACCENT_PRESETS`, e.g. ``'Red'``) used as
+            the banner swatch color.  ``None`` or ``'None'``
+            means no swatch.
         """
         super().__init__(parent)
         self._runner = runner
-        self.title(title)
+        self._base_title = title
         self.minsize(560, 480)
 
         self._was_busy = False
@@ -330,6 +358,15 @@ class StateRunnerWindow(tk.Toplevel):
         self._on_close_callback = on_close_callback
         self._log_file_handle = None
 
+        # Appearance state.  Tracked separately from the Tk
+        # variables so _apply_appearance can short-circuit when
+        # nothing actually changed (flicker avoidance).
+        self._current_nickname: str = nickname or ''
+        accent_key = accent_color if accent_color in _ACCENT_PRESETS \
+            else _ACCENT_NONE
+        self._current_accent: str = accent_key
+
+        self._build_banner_frame()
         self._build_state_frame()
         self._build_trigger_frame()
         self._build_button_frame()
@@ -341,6 +378,7 @@ class StateRunnerWindow(tk.Toplevel):
         self._refresh_state_display()
         self._refresh_trigger_dropdown()
         self._set_controls_idle()
+        self._apply_appearance()
 
         self._register_state_variable_callback()
 
@@ -350,6 +388,112 @@ class StateRunnerWindow(tk.Toplevel):
     # =============================================================
     # UI construction
     # =============================================================
+
+    def _build_banner_frame(self) -> None:
+        """Create the identification banner at the top of the window.
+
+        The banner is a thin row containing an optional color
+        swatch and a bold nickname label.  It uses plain ``tk``
+        widgets (not ``ttk``) because ``tk.Frame`` and
+        ``tk.Label`` honor ``bg`` reliably on all platforms
+        without fighting the ttk theme.
+
+        The whole banner is hidden (``pack_forget``) when there
+        is no nickname and no accent color.  :meth:`_apply_appearance`
+        manages visibility.
+        """
+        self._banner_frame = tk.Frame(self)
+        # Do not pack yet; _apply_appearance decides visibility.
+
+        self._banner_swatch = tk.Frame(
+            self._banner_frame, width=14, height=22,
+            bd=1, relief='solid',
+        )
+        # pack_propagate(False) keeps the swatch at its fixed size
+        # regardless of the (empty) children it contains.
+        self._banner_swatch.pack_propagate(False)
+
+        self._banner_label = tk.Label(
+            self._banner_frame, text='',
+            font=('TkDefaultFont', 12, 'bold'),
+            anchor='w',
+        )
+
+    def _apply_appearance(self) -> None:
+        """Update banner widgets and OS title from current state.
+
+        This method is idempotent and only mutates widget
+        properties when the incoming values actually differ
+        from what is already displayed.  That keeps the banner
+        and title bar from repainting on every poll tick,
+        avoiding any visible flicker.
+        """
+        nickname = self._current_nickname
+        accent_key = self._current_accent
+        accent_hex = _ACCENT_PRESETS.get(accent_key)
+
+        # --- OS window title ---
+        if nickname:
+            desired_title = f'{nickname} \u2014 {self._base_title}'
+        else:
+            desired_title = self._base_title
+        if self.title() != desired_title:
+            self.title(desired_title)
+
+        # --- banner label text ---
+        current_label = self._banner_label.cget('text')
+        if current_label != nickname:
+            self._banner_label.config(text=nickname)
+
+        # --- swatch color and visibility ---
+        if accent_hex is None:
+            if self._banner_swatch.winfo_manager():
+                self._banner_swatch.pack_forget()
+        else:
+            current_bg = self._banner_swatch.cget('bg')
+            if current_bg != accent_hex:
+                self._banner_swatch.config(bg=accent_hex)
+            if not self._banner_swatch.winfo_manager():
+                self._banner_swatch.pack(
+                    side='left', padx=(8, 6), pady=6,
+                )
+
+        # --- label visibility ---
+        if nickname:
+            if not self._banner_label.winfo_manager():
+                self._banner_label.pack(
+                    side='left', fill='x', expand=True,
+                    padx=(0, 8), pady=6,
+                )
+        else:
+            if self._banner_label.winfo_manager():
+                self._banner_label.pack_forget()
+
+        # --- whole banner visibility ---
+        # Show the banner if either a nickname or an accent is set.
+        show_banner = bool(nickname) or (accent_hex is not None)
+        if show_banner:
+            if not self._banner_frame.winfo_manager():
+                # Pack before everything else so it sits at the top.
+                self._banner_frame.pack(
+                    fill='x', side='top', before=self._state_label_anchor(),
+                )
+        else:
+            if self._banner_frame.winfo_manager():
+                self._banner_frame.pack_forget()
+
+    def _state_label_anchor(self) -> tk.Widget:
+        """Return the widget the banner should pack above.
+
+        Using ``pack(..., before=widget)`` lets us insert the
+        banner at the top even though other frames were packed
+        first.  We key off the first child of ``self`` that
+        isn't the banner itself.
+        """
+        for child in self.winfo_children():
+            if child is not self._banner_frame:
+                return child
+        return self  # fallback; shouldn't happen in practice
 
     def _build_state_frame(self) -> None:
         """Create the state display area."""
@@ -473,7 +617,81 @@ class StateRunnerWindow(tk.Toplevel):
 
         self._build_interval_param(inner, row=0)
         self._build_logfile_param(inner, row=1)
+        self._build_nickname_param(inner, row=2)
+        self._build_accent_param(inner, row=3)
         inner.columnconfigure(1, weight=1)
+
+    def _build_nickname_param(
+        self, inner: ttk.Frame, row: int,
+    ) -> None:
+        """Add the window nickname entry to *inner*.
+
+        The nickname is applied only when the user commits the
+        edit (``<Return>`` or focus-out), not on every keystroke.
+        This keeps the banner and OS title from repainting on
+        each character and avoids any flicker.
+        """
+        ttk.Label(inner, text='Window nickname:').grid(
+            row=row, column=0, sticky='w',
+            padx=(0, 4), pady=(4, 0),
+        )
+        self._nickname_var = tk.StringVar(
+            value=self._current_nickname,
+        )
+        entry = ttk.Entry(
+            inner, textvariable=self._nickname_var, width=24,
+        )
+        entry.grid(row=row, column=1, sticky='w', pady=(4, 0))
+        entry.bind('<Return>', self._on_nickname_commit)
+        entry.bind('<FocusOut>', self._on_nickname_commit)
+        add_tooltip(
+            entry,
+            'Short label shown in a banner at the top of '
+            'this window and prepended to the OS title, to '
+            'help tell multiple runner windows apart.  '
+            'Press Enter or click elsewhere to apply.',
+        )
+
+    def _build_accent_param(
+        self, inner: ttk.Frame, row: int,
+    ) -> None:
+        """Add the accent color OptionMenu to *inner*."""
+        ttk.Label(inner, text='Accent color:').grid(
+            row=row, column=0, sticky='w',
+            padx=(0, 4), pady=(4, 0),
+        )
+        self._accent_var = tk.StringVar(
+            value=self._current_accent,
+        )
+        menu = ttk.OptionMenu(
+            inner, self._accent_var, self._current_accent,
+            *_ACCENT_PRESETS.keys(),
+            command=self._on_accent_changed,
+        )
+        menu.grid(row=row, column=1, sticky='w', pady=(4, 0))
+        add_tooltip(
+            menu,
+            'Color swatch shown in the banner at the top of '
+            'this window, to help tell multiple runner '
+            'windows apart.',
+        )
+
+    def _on_nickname_commit(self, _event=None) -> None:
+        """Apply a new nickname from the entry widget."""
+        new_value = self._nickname_var.get().strip()
+        if new_value == self._current_nickname:
+            return
+        self._current_nickname = new_value
+        self._apply_appearance()
+
+    def _on_accent_changed(self, value: str) -> None:
+        """Apply a new accent color from the OptionMenu."""
+        if value not in _ACCENT_PRESETS:
+            return
+        if value == self._current_accent:
+            return
+        self._current_accent = value
+        self._apply_appearance()
 
     def _build_interval_param(
         self, inner: ttk.Frame, row: int,
@@ -1120,6 +1338,8 @@ class StateRunnerWindow(tk.Toplevel):
         runner: StateRunner,
         title: str = 'State Runner',
         kill_on_close: bool = False,
+        nickname: Optional[str] = None,
+        accent_color: Optional[str] = None,
     ) -> None:
         """Launch a standalone window and enter mainloop.
 
@@ -1132,6 +1352,10 @@ class StateRunnerWindow(tk.Toplevel):
         :param title: window title string.
         :param kill_on_close: If True, we quit/destroy root when window is
                               closed. This is for stand-alone runner.
+        :param nickname: optional initial nickname for the
+            window banner (see :meth:`__init__`).
+        :param accent_color: optional initial accent preset
+            name for the banner swatch (see :meth:`__init__`).
         """
         root = tk._default_root  # noqa: SLF001
         created_root = root is None
@@ -1149,5 +1373,7 @@ class StateRunnerWindow(tk.Toplevel):
         window = cls(
             root, runner, title=title,
             on_close_callback=on_close,
+            nickname=nickname,
+            accent_color=accent_color,
         )
         window.mainloop()
