@@ -36,7 +36,7 @@ import logging
 import os
 import threading
 from tkinter import filedialog, messagebox
-from typing import Optional
+from typing import Callable, Optional
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext
@@ -312,6 +312,7 @@ class StateRunnerWindow(tk.Toplevel):
         parent: tk.Misc,
         runner: StateRunner,
         title: str = 'State Runner',
+        on_close_callback: Optional[Callable] = None,
     ):
         """Create the state runner GUI.
 
@@ -326,6 +327,7 @@ class StateRunnerWindow(tk.Toplevel):
 
         self._was_busy = False
         self._last_logged_status: Optional[str] = None
+        self._on_close_callback = on_close_callback
         self._log_file_handle = None
 
         self._build_state_frame()
@@ -1105,6 +1107,8 @@ class StateRunnerWindow(tk.Toplevel):
         self._deregister_state_variable_callback()
         self._close_log_file()
         self.destroy()
+        if self._on_close_callback is not None:
+            self._on_close_callback()
 
     # =============================================================
     # Convenience launcher
@@ -1115,18 +1119,35 @@ class StateRunnerWindow(tk.Toplevel):
         cls,
         runner: StateRunner,
         title: str = 'State Runner',
+        kill_on_close: bool = False,
     ) -> None:
         """Launch a standalone window and enter mainloop.
 
         If a Tk root already exists, this creates a Toplevel
-        under it.  Otherwise it creates a new Tk root first.
+        under it.  Otherwise it creates a new Tk root first
+        and arranges for it to be destroyed when the window
+        is closed, so the process exits cleanly.
 
         :param runner: the :class:`StateRunner` to display.
         :param title: window title string.
+        :param kill_on_close: If True, we quit/destroy root when window is
+                              closed. This is for stand-alone runner.
         """
         root = tk._default_root  # noqa: SLF001
-        if root is None:
+        created_root = root is None
+        if created_root:
             root = tk.Tk()
             root.withdraw()
-        window = cls(root, runner, title=title)
+        if kill_on_close:
+            def on_close():
+                LOGGER.info('closed StateRunnerWindow for %s', title)
+                root.quit()
+                root.destroy()
+        else:
+            on_close = lambda: LOGGER.debug('closed StateRunnerWindow for %s',
+                                            title)
+        window = cls(
+            root, runner, title=title,
+            on_close_callback=on_close,
+        )
         window.mainloop()
