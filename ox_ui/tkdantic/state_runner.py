@@ -160,6 +160,29 @@ class StateRunner:
             if t not in auto_prefixes
         ]
 
+    def get_preferred_trigger(self) -> Optional[str]:
+        """Return the trigger the UI dropdown should default-select.
+
+        Optional hook: if the underlying runnable defines a
+        ``get_preferred_trigger()`` method, delegate to it. The UI
+        uses the returned value only if it is a member of the
+        currently-available trigger list (see
+        :meth:`get_available_triggers`); otherwise it falls back to
+        the first available trigger.
+
+        :returns: trigger name, or ``None`` if the runnable has no
+            preference (or doesn't implement the hook).
+        """
+        getter = getattr(self.runnable, 'get_preferred_trigger', None)
+        if getter is None:
+            return None
+        try:
+            return getter()
+        except Exception:  # pylint: disable=broad-except
+            LOGGER.exception(
+                'get_preferred_trigger raised; falling back to default')
+            return None
+
     # --- transition control -------------------------------------
 
     def is_busy(self) -> bool:
@@ -596,6 +619,25 @@ class StateRunnerWindow(tk.Toplevel):
         )
         self._go_btn.pack(side='left')
         add_tooltip(self._go_btn, 'Fire the selected trigger.')
+
+        # Enter fires Go from anywhere in this window — dropdown,
+        # Go button itself, or any non-text-entry widget that
+        # doesn't consume Return. _on_return_key no-ops if the
+        # focused widget is a Text/Entry (so Return still works
+        # normally in editable fields) or if Go is disabled.
+        self.bind('<Return>', self._on_return_key)
+        self.bind('<KP_Enter>', self._on_return_key)
+
+    def _on_return_key(self, event) -> None:
+        """Fire the Go button on Enter, unless focus is in a text
+        entry widget or Go is disabled.
+        """
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry)):
+            return
+        if str(self._go_btn.cget('state')) == 'disabled':
+            return
+        self._on_go()
 
     def _make_button(
         self, parent, text, command, tooltip, **pack_kw,
@@ -1113,7 +1155,15 @@ class StateRunnerWindow(tk.Toplevel):
         )
 
     def _refresh_trigger_dropdown(self) -> None:
-        """Repopulate the trigger dropdown for current state."""
+        """Repopulate the trigger dropdown for current state.
+
+        After repopulating, selects the runnable's preferred trigger
+        (via :meth:`StateRunner.get_preferred_trigger`) if it names a
+        currently-available trigger; otherwise falls back to the
+        first trigger in the list. Also moves keyboard focus to the
+        Go button so the user can fire the selected trigger with
+        Enter without touching the mouse.
+        """
         triggers = self._runner.get_available_triggers()
         menu = self._trigger_menu['menu']
         menu.delete(0, 'end')
@@ -1124,7 +1174,19 @@ class StateRunnerWindow(tk.Toplevel):
                     label=t,
                     command=lambda v=t: self._trigger_var.set(v),
                 )
-            self._trigger_var.set(triggers[0])
+            preferred = self._runner.get_preferred_trigger()
+            if preferred and preferred in triggers:
+                self._trigger_var.set(preferred)
+            else:
+                self._trigger_var.set(triggers[0])
+            # Focus Go button so Enter fires the (pre-selected)
+            # trigger without any clicks. Guard against the
+            # disabled case (mid-transition) explicitly.
+            try:
+                if str(self._go_btn.cget('state')) != 'disabled':
+                    self._go_btn.focus_set()
+            except tk.TclError:
+                pass
         else:
             self._trigger_var.set('')
 
