@@ -367,6 +367,7 @@ class StateRunnerWindow(tk.Toplevel):
         self._current_accent: str = accent_key
 
         self._build_banner_frame()
+        self._build_bottom_stripe()
         self._build_state_frame()
         self._build_trigger_frame()
         self._build_button_frame()
@@ -392,41 +393,81 @@ class StateRunnerWindow(tk.Toplevel):
     def _build_banner_frame(self) -> None:
         """Create the identification banner at the top of the window.
 
-        The banner is a thin row containing an optional color
-        swatch and a bold nickname label.  It uses plain ``tk``
-        widgets (not ``ttk``) because ``tk.Frame`` and
-        ``tk.Label`` honor ``bg`` reliably on all platforms
-        without fighting the ttk theme.
+        The banner is a full-width bar whose background is set
+        to the accent color (if any).  When a nickname is set,
+        the banner contains a bold label with contrasting text
+        color; when only an accent is set, the banner becomes a
+        thin colored stripe with no label.  When neither is set,
+        the banner is hidden entirely.
 
-        The whole banner is hidden (``pack_forget``) when there
-        is no nickname and no accent color.  :meth:`_apply_appearance`
-        manages visibility.
+        Uses plain ``tk`` widgets (not ``ttk``) because
+        ``tk.Frame`` and ``tk.Label`` honor ``bg`` reliably on
+        all platforms without fighting the ttk theme.
+
+        :meth:`_apply_appearance` manages color, size, and
+        visibility.
         """
-        self._banner_frame = tk.Frame(self)
-        # Do not pack yet; _apply_appearance decides visibility.
+        # Capture the default Toplevel background so we can
+        # restore it when the user clears the accent color.
+        self._default_bg = self.cget('bg')
 
-        self._banner_swatch = tk.Frame(
-            self._banner_frame, width=14, height=22,
-            bd=1, relief='solid',
-        )
-        # pack_propagate(False) keeps the swatch at its fixed size
-        # regardless of the (empty) children it contains.
-        self._banner_swatch.pack_propagate(False)
+        self._banner_frame = tk.Frame(self, bd=0, highlightthickness=0)
+        # pack_propagate(False) lets us set an explicit height
+        # for the thin-stripe mode without the label's natural
+        # size overriding it.
+        self._banner_frame.pack_propagate(False)
+        # Do not pack yet; _apply_appearance decides visibility.
 
         self._banner_label = tk.Label(
             self._banner_frame, text='',
             font=('TkDefaultFont', 12, 'bold'),
-            anchor='w',
+            anchor='w', bd=0,
         )
 
+    def _build_bottom_stripe(self) -> None:
+        """Create a thin colored stripe at the bottom of the window.
+
+        Mirrors the top banner's accent color to provide a
+        second visual anchor, so the window is identifiable
+        even if the top is hidden behind another window.  The
+        stripe is hidden when no accent color is set.
+        """
+        self._bottom_stripe = tk.Frame(
+            self, bd=0, highlightthickness=0, height=4,
+        )
+        self._bottom_stripe.pack_propagate(False)
+        # Do not pack yet; _apply_appearance decides visibility.
+
+    @staticmethod
+    def _contrasting_text_color(hex_color: str) -> str:
+        """Return ``'black'`` or ``'white'`` for readable text.
+
+        Uses the standard luminance formula
+        ``0.299*R + 0.587*G + 0.114*B`` to decide which gives
+        better contrast against *hex_color*.
+
+        :param hex_color: a ``'#rrggbb'`` color string.
+        :returns: ``'black'`` or ``'white'``.
+        """
+        try:
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+        except (ValueError, IndexError):
+            return 'black'
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return 'black' if luminance > 140 else 'white'
+
     def _apply_appearance(self) -> None:
-        """Update banner widgets and OS title from current state.
+        """Update banner, bottom stripe, and OS title.
 
         This method is idempotent and only mutates widget
         properties when the incoming values actually differ
         from what is already displayed.  That keeps the banner
-        and title bar from repainting on every poll tick,
-        avoiding any visible flicker.
+        and title bar from repainting unnecessarily, avoiding
+        any visible flicker.  It is only called from
+        ``__init__`` and from the nickname/accent commit
+        handlers, never from the poll loop.
         """
         nickname = self._current_nickname
         accent_key = self._current_accent
@@ -440,47 +481,71 @@ class StateRunnerWindow(tk.Toplevel):
         if self.title() != desired_title:
             self.title(desired_title)
 
-        # --- banner label text ---
-        current_label = self._banner_label.cget('text')
-        if current_label != nickname:
-            self._banner_label.config(text=nickname)
-
-        # --- swatch color and visibility ---
-        if accent_hex is None:
-            if self._banner_swatch.winfo_manager():
-                self._banner_swatch.pack_forget()
+        # --- determine banner colors ---
+        if accent_hex is not None:
+            banner_bg = accent_hex
+            label_fg = self._contrasting_text_color(accent_hex)
         else:
-            current_bg = self._banner_swatch.cget('bg')
-            if current_bg != accent_hex:
-                self._banner_swatch.config(bg=accent_hex)
-            if not self._banner_swatch.winfo_manager():
-                self._banner_swatch.pack(
-                    side='left', padx=(8, 6), pady=6,
-                )
+            banner_bg = self._default_bg
+            # Use the system default label foreground.  We look
+            # it up once via a throwaway probe so we don't have
+            # to hard-code a color.
+            label_fg = 'black'
 
-        # --- label visibility ---
+        # --- banner frame bg ---
+        if self._banner_frame.cget('bg') != banner_bg:
+            self._banner_frame.config(bg=banner_bg)
+
+        # --- banner label text, bg, fg ---
+        if self._banner_label.cget('text') != nickname:
+            self._banner_label.config(text=nickname)
+        if self._banner_label.cget('bg') != banner_bg:
+            self._banner_label.config(bg=banner_bg)
+        if str(self._banner_label.cget('fg')) != label_fg:
+            self._banner_label.config(fg=label_fg)
+
+        # --- banner height and label visibility ---
+        # Case A: nickname set (with or without accent) -> tall
+        #         banner with label.
+        # Case B: accent only, no nickname -> thin stripe, no
+        #         label.
+        # Case C: neither -> hidden (handled below).
         if nickname:
+            desired_height = 34
             if not self._banner_label.winfo_manager():
                 self._banner_label.pack(
-                    side='left', fill='x', expand=True,
-                    padx=(0, 8), pady=6,
+                    fill='both', expand=True,
+                    padx=10, pady=6,
                 )
         else:
+            desired_height = 6
             if self._banner_label.winfo_manager():
                 self._banner_label.pack_forget()
 
+        if int(self._banner_frame.cget('height')) != desired_height:
+            self._banner_frame.config(height=desired_height)
+
         # --- whole banner visibility ---
-        # Show the banner if either a nickname or an accent is set.
         show_banner = bool(nickname) or (accent_hex is not None)
         if show_banner:
             if not self._banner_frame.winfo_manager():
-                # Pack before everything else so it sits at the top.
                 self._banner_frame.pack(
-                    fill='x', side='top', before=self._state_label_anchor(),
+                    fill='x', side='top',
+                    before=self._state_label_anchor(),
                 )
         else:
             if self._banner_frame.winfo_manager():
                 self._banner_frame.pack_forget()
+
+        # --- bottom stripe ---
+        if accent_hex is not None:
+            if self._bottom_stripe.cget('bg') != accent_hex:
+                self._bottom_stripe.config(bg=accent_hex)
+            if not self._bottom_stripe.winfo_manager():
+                self._bottom_stripe.pack(fill='x', side='bottom')
+        else:
+            if self._bottom_stripe.winfo_manager():
+                self._bottom_stripe.pack_forget()
 
     def _state_label_anchor(self) -> tk.Widget:
         """Return the widget the banner should pack above.
@@ -488,10 +553,11 @@ class StateRunnerWindow(tk.Toplevel):
         Using ``pack(..., before=widget)`` lets us insert the
         banner at the top even though other frames were packed
         first.  We key off the first child of ``self`` that
-        isn't the banner itself.
+        isn't the banner or the bottom stripe.
         """
+        skip = {self._banner_frame, self._bottom_stripe}
         for child in self.winfo_children():
-            if child is not self._banner_frame:
+            if child not in skip:
                 return child
         return self  # fallback; shouldn't happen in practice
 
