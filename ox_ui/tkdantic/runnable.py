@@ -50,6 +50,7 @@ from pydantic import BaseModel
 from transitions import Machine
 
 from ox_ui.tkdantic.callbacks import SimpleCallback
+from ox_ui.tkdantic.status_manager import Status
 
 LOGGER = logging.getLogger(__name__)
 
@@ -100,6 +101,10 @@ class RunnableMachine(Protocol):
         """Return current human-readable status string."""
         ...
 
+    def get_raw_status(self) -> str:
+        """Return status string (without headers)."""
+        ...
+
     def get_state_variables(self) -> Optional[BaseModel]:
         """Return a snapshot of the current state variables.
 
@@ -137,10 +142,26 @@ class RunnableMachineHelper:
     ``pytransitions`` callbacks (``on_enter_<state>``, ``before``,
     ``after``, etc.) which run on the worker thread spawned by
     :class:`StateRunner`.
+
+    The human-readable status (raw text plus named headers) lives
+    on the public :attr:`status` attribute, which is a
+    :class:`Status` instance.  The same instance can be handed to
+    helper functions or other objects so they can update the
+    displayed status without being given access to the full
+    helper.  The status-related methods on this class
+    (:meth:`set_status`, :meth:`get_status_text`, etc.) are thin
+    delegates to :attr:`status` kept for backward compatibility.
     """
 
-    def __init__(self) -> None:
-        """Initialise threading primitives and state."""
+    def __init__(self, status: Optional[Status] = None) -> None:
+        """Initialise threading primitives and state.
+
+        :param status: optional :class:`Status` instance to use
+            for the human-readable status text.  If ``None``
+            (the default), a fresh :class:`Status` is created.
+            Pass an existing instance to share a status display
+            between cooperating objects.
+        """
         # Set means "running" (not paused).
         self._pause_event = threading.Event()
         self._pause_event.set()
@@ -148,12 +169,15 @@ class RunnableMachineHelper:
         # Set means "cancel requested".
         self._cancel_event = threading.Event()
 
-        # Guards reads/writes of _progress and _status_text.
+        # Guards reads/writes of _progress.
         self._state_lock = threading.Lock()
         self._progress: Optional[float] = None
-        self._status_text: str = ''
-        self._status_headers: dict[str, str] = {}
-        self._status_before_pause: str = ''
+
+        # Human-readable status (raw text + named headers).
+        # Owns its own lock internally.
+        self.status: Status = (
+            status if status is not None else Status()
+        )
 
         # State variables: user-configurable pydantic model.
         self._state_vars: Optional[BaseModel] = None
@@ -214,14 +238,16 @@ class RunnableMachineHelper:
     def get_status_text(self) -> str:
         """Return headers (if any) followed by the current status.
 
-        The returned string is for display only; headers and the
-        raw status text are stored separately.
+        Delegates to :attr:`status`.
         """
-        with self._state_lock:
-            parts = list(self._status_headers.values())
-            if self._status_text:
-                parts.append(self._status_text)
-            return '\n'.join(parts)
+        return self.status.get_status_text()
+
+    def get_raw_status(self) -> str:
+        """Return current status (without headers).
+
+        Delegates to :attr:`status`.
+        """
+        return self.status.get_raw_status()    
 
     def set_progress(self, value: Optional[float]) -> None:
         """Set progress.  Call from pytransitions callbacks.
@@ -234,50 +260,42 @@ class RunnableMachineHelper:
     def set_status(self, text: str) -> None:
         """Set the raw status text.  Call from pytransitions callbacks.
 
-        This replaces only the raw portion; status headers are
-        unaffected.
+        Delegates to :attr:`status`.  This replaces only the raw
+        portion; status headers are unaffected.
 
         :param text: human-readable status message.
         """
-        with self._state_lock:
-            self._status_text = text
+        self.status.set_status(text)
 
     def append_status(self, text: str) -> None:
         """Append to the raw status text.
 
-        Useful when a callback wants to add detail without
-        overwriting what is already there.
+        Delegates to :attr:`status`.
 
         :param text: text to append (a newline is prepended
             automatically if the raw status is non-empty).
         """
-        with self._state_lock:
-            if self._status_text:
-                self._status_text += '\n' + text
-            else:
-                self._status_text = text
+        self.status.append_status(text)
 
     def add_status_header(self, name: str, text: str) -> None:
         """Add or replace a named status header.
 
-        Headers are displayed above the raw status text by
-        :meth:`get_status_text`.
+        Delegates to :attr:`status`.
 
         :param name: unique key for this header.
         :param text: header text to display.
         """
-        with self._state_lock:
-            self._status_headers[name] = text
+        self.status.add_status_header(name, text)
 
     def remove_status_header(self, name: str) -> None:
         """Remove a status header by name.
 
-        Silently ignores unknown names.
+        Delegates to :attr:`status`.  Silently ignores unknown
+        names.
 
         :param name: key passed to :meth:`add_status_header`.
         """
-        with self._state_lock:
-            self._status_headers.pop(name, None)
+        self.status.remove_status_header(name)
 
     # --- worker-thread helpers -----------------------------------
 
@@ -290,8 +308,7 @@ class RunnableMachineHelper:
         """
         if self._pause_event.is_set():
             return
-        with self._state_lock:
-            previous = self._status_text
+        previous = self.status.get_raw_status()
         self.set_status('Paused.')
         LOGGER.debug('Worker paused.')
         self._pause_event.wait()
@@ -312,8 +329,7 @@ class RunnableMachineHelper:
         self._cancel_event.clear()
         with self._state_lock:
             self._progress = None
-            self._status_text = ''
-            self._status_headers.clear()
+        self.status.clear()
 
     # --- state variables -----------------------------------------
 
