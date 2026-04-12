@@ -50,6 +50,7 @@ from pydantic import BaseModel
 from transitions import Machine
 
 from ox_ui.tkdantic.callbacks import SimpleCallback
+from ox_ui.tkdantic.run_controller import RunController
 from ox_ui.tkdantic.status_manager import Status
 
 LOGGER = logging.getLogger(__name__)
@@ -101,10 +102,6 @@ class RunnableMachine(Protocol):
         """Return current human-readable status string."""
         ...
 
-    def get_raw_status(self) -> str:
-        """Return status string (without headers)."""
-        ...
-
     def get_state_variables(self) -> Optional[BaseModel]:
         """Return a snapshot of the current state variables.
 
@@ -143,17 +140,26 @@ class RunnableMachineHelper:
     ``after``, etc.) which run on the worker thread spawned by
     :class:`StateRunner`.
 
-    The human-readable status (raw text plus named headers) lives
-    on the public :attr:`status` attribute, which is a
-    :class:`Status` instance.  The same instance can be handed to
-    helper functions or other objects so they can update the
-    displayed status without being given access to the full
-    helper.  The status-related methods on this class
-    (:meth:`set_status`, :meth:`get_status_text`, etc.) are thin
-    delegates to :attr:`status` kept for backward compatibility.
+    Two public attributes expose the cooperative primitives so
+    they can be handed to helper functions or other objects
+    without exposing the full helper:
+
+    * :attr:`status` — a :class:`Status` instance owning the
+      human-readable status text and named headers.
+    * :attr:`controller` — a :class:`RunController` instance
+      owning the pause / cancel events.
+
+    The status-related and control-related methods on this class
+    (:meth:`set_status`, :meth:`pause`, :meth:`wait_if_paused`,
+    etc.) are thin delegates to those attributes, kept for
+    backward compatibility.
     """
 
-    def __init__(self, status: Optional[Status] = None) -> None:
+    def __init__(
+        self,
+        status: Optional[Status] = None,
+        controller: Optional[RunController] = None,
+    ) -> None:
         """Initialise threading primitives and state.
 
         :param status: optional :class:`Status` instance to use
@@ -161,13 +167,17 @@ class RunnableMachineHelper:
             (the default), a fresh :class:`Status` is created.
             Pass an existing instance to share a status display
             between cooperating objects.
+        :param controller: optional :class:`RunController`
+            instance owning the pause / cancel events.  If
+            ``None`` (the default), a fresh :class:`RunController`
+            is created.  Pass an existing instance to share
+            cooperative control between cooperating objects.
         """
-        # Set means "running" (not paused).
-        self._pause_event = threading.Event()
-        self._pause_event.set()
-
-        # Set means "cancel requested".
-        self._cancel_event = threading.Event()
+        # Cooperative pause / cancel.  Owns its own events.
+        self.controller: RunController = (
+            controller if controller is not None
+            else RunController()
+        )
 
         # Guards reads/writes of _progress.
         self._state_lock = threading.Lock()
@@ -211,22 +221,25 @@ class RunnableMachineHelper:
     # --- pause / resume / cancel ---------------------------------
 
     def pause(self) -> None:
-        """Request the worker to pause at the next safe point."""
-        self._pause_event.clear()
-        LOGGER.debug('Pause requested.')
+        """Request the worker to pause at the next safe point.
+
+        Delegates to :attr:`controller`.
+        """
+        self.controller.pause()
 
     def resume(self) -> None:
-        """Resume a paused worker."""
-        self._pause_event.set()
-        LOGGER.debug('Resume requested.')
+        """Resume a paused worker.
+
+        Delegates to :attr:`controller`.
+        """
+        self.controller.resume()
 
     def cancel(self) -> None:
-        """Request cooperative cancellation."""
-        # Also resume in case we are paused, so the worker
-        # thread unblocks and can check is_cancelled().
-        self._cancel_event.set()
-        self._pause_event.set()
-        LOGGER.debug('Cancel requested.')
+        """Request cooperative cancellation.
+
+        Delegates to :attr:`controller`.
+        """
+        self.controller.cancel()
 
     # --- progress / status (thread-safe) -------------------------
 
@@ -243,11 +256,11 @@ class RunnableMachineHelper:
         return self.status.get_status_text()
 
     def get_raw_status(self) -> str:
-        """Return current status (without headers).
+        """Return just the raw status text, without headers.
 
         Delegates to :attr:`status`.
         """
-        return self.status.get_raw_status()    
+        return self.status.get_raw_status()
 
     def set_progress(self, value: Optional[float]) -> None:
         """Set progress.  Call from pytransitions callbacks.
@@ -302,31 +315,27 @@ class RunnableMachineHelper:
     def wait_if_paused(self) -> None:
         """Block until resumed.  Call inside long-running loops.
 
-        Updates the status text to indicate a paused state and
-        restores the previous raw status on resume.  Status
+        Delegates to :attr:`controller`, passing :attr:`status`
+        so the raw status text is set to ``'Paused.'`` for the
+        duration of the pause and restored on resume.  Status
         headers are not affected.
         """
-        if self._pause_event.is_set():
-            return
-        previous = self.status.get_raw_status()
-        self.set_status('Paused.')
-        LOGGER.debug('Worker paused.')
-        self._pause_event.wait()
-        LOGGER.debug('Worker resumed.')
-        self.set_status(previous)
+        self.controller.wait_if_paused(self.status)
 
     def is_cancelled(self) -> bool:
-        """Return True if cancellation has been requested."""
-        return self._cancel_event.is_set()
+        """Return True if cancellation has been requested.
+
+        Delegates to :attr:`controller`.
+        """
+        return self.controller.is_cancelled()
 
     def reset_run_state(self) -> None:
-        """Reset pause/cancel/progress for a new transition.
+        """Reset pause/cancel/progress/status for a new transition.
 
         Called by :class:`StateRunner` before spawning the
         worker thread.
         """
-        self._pause_event.set()
-        self._cancel_event.clear()
+        self.controller.reset()
         with self._state_lock:
             self._progress = None
         self.status.clear()
