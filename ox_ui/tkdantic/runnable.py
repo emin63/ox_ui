@@ -51,6 +51,7 @@ from transitions import Machine
 
 from ox_ui.tkdantic.callbacks import SimpleCallback
 from ox_ui.tkdantic.run_controller import RunController
+from ox_ui.tkdantic.state_variables import StateVariables
 from ox_ui.tkdantic.status_manager import Status
 
 LOGGER = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ class RunnableMachineHelper:
     ``after``, etc.) which run on the worker thread spawned by
     :class:`StateRunner`.
 
-    Two public attributes expose the cooperative primitives so
+    Three public attributes expose the cooperative primitives so
     they can be handed to helper functions or other objects
     without exposing the full helper:
 
@@ -148,17 +149,23 @@ class RunnableMachineHelper:
       human-readable status text and named headers.
     * :attr:`controller` — a :class:`RunController` instance
       owning the pause / cancel events.
+    * :attr:`state_vars` — a :class:`StateVariables` instance
+      owning the user-configurable pydantic model and the
+      callbacks that fire when it is replaced.
 
-    The status-related and control-related methods on this class
-    (:meth:`set_status`, :meth:`pause`, :meth:`wait_if_paused`,
-    etc.) are thin delegates to those attributes, kept for
-    backward compatibility.
+    The status-related, control-related, and state-variable
+    methods on this class (:meth:`set_status`, :meth:`pause`,
+    :meth:`wait_if_paused`, :meth:`get_state_variables`, etc.)
+    are thin delegates to those attributes, kept for backward
+    compatibility and to satisfy the :class:`RunnableMachine`
+    protocol.
     """
 
     def __init__(
         self,
         status: Optional[Status] = None,
         controller: Optional[RunController] = None,
+        state_vars: Optional[StateVariables] = None,
     ) -> None:
         """Initialise threading primitives and state.
 
@@ -172,6 +179,12 @@ class RunnableMachineHelper:
             ``None`` (the default), a fresh :class:`RunController`
             is created.  Pass an existing instance to share
             cooperative control between cooperating objects.
+        :param state_vars: optional :class:`StateVariables`
+            instance owning the user-configurable pydantic model
+            and its changed-callbacks.  If ``None`` (the default),
+            a fresh :class:`StateVariables` is created.  Pass an
+            existing instance to share state variables between
+            cooperating objects.
         """
         # Cooperative pause / cancel.  Owns its own events.
         self.controller: RunController = (
@@ -189,13 +202,12 @@ class RunnableMachineHelper:
             status if status is not None else Status()
         )
 
-        # State variables: user-configurable pydantic model.
-        self._state_vars: Optional[BaseModel] = None
-
-        # Callbacks fired when state variables change.
-        self._callbacks_lock = threading.Lock()
-        self._state_changed_callbacks: dict[
-            str, SimpleCallback] = {}
+        # User-configurable pydantic model + changed-callbacks.
+        # Owns its own lock internally.
+        self.state_vars: StateVariables = (
+            state_vars if state_vars is not None
+            else StateVariables()
+        )
 
     # --- abstract (must override) --------------------------------
 
@@ -345,30 +357,29 @@ class RunnableMachineHelper:
     def get_state_variables(self) -> Optional[BaseModel]:
         """Return a deep copy of the current state variables.
 
-        Returns ``None`` if this machine has no user-configurable
-        variables (the default).  The returned instance is a
-        **snapshot**; callers should not mutate it.
+        Delegates to :attr:`state_vars`.  Returns ``None`` if
+        this machine has no user-configurable variables (the
+        default).  The returned instance is a **snapshot**;
+        callers should not mutate it.
         """
-        if self._state_vars is None:
-            return None
-        return self._state_vars.model_copy(deep=True)
+        return self.state_vars.get()
 
     def set_state_variables(
         self, variables: BaseModel,
     ) -> None:
         """Replace the current state variables wholesale.
 
-        A deep copy of *variables* is stored so the caller
-        retains no shared reference.  After storing, all
-        registered state-changed callbacks are executed.
+        Delegates to :attr:`state_vars`.  A deep copy of
+        *variables* is stored so the caller retains no shared
+        reference.  After storing, all registered state-changed
+        callbacks are executed.
 
         Callers should only invoke this when the machine is
         idle or paused.
 
         :param variables: validated pydantic model instance.
         """
-        self._state_vars = variables.model_copy(deep=True)
-        self.execute_state_changed_callbacks()
+        self.state_vars.set(variables)
 
     # --- state-changed callbacks ---------------------------------
 
@@ -377,48 +388,35 @@ class RunnableMachineHelper:
     ) -> None:
         """Register a named callback for state-variable changes.
 
-        If *name* already exists it is replaced.
+        Delegates to :attr:`state_vars`.  If *name* already
+        exists it is replaced.
 
         :param name: unique key for this callback.
         :param callback: :class:`SimpleCallback` to invoke.
         """
-        with self._callbacks_lock:
-            self._state_changed_callbacks[name] = callback
+        self.state_vars.add_changed_callback(name, callback)
 
     def remove_state_changed_callback(self, name: str) -> None:
         """Remove a previously registered callback by name.
 
-        Silently ignores unknown names.
+        Delegates to :attr:`state_vars`.  Silently ignores
+        unknown names.
 
         :param name: the key passed to
             :meth:`add_state_changed_callback`.
         """
-        with self._callbacks_lock:
-            self._state_changed_callbacks.pop(name, None)
+        self.state_vars.remove_changed_callback(name)
 
     def execute_state_changed_callbacks(self) -> None:
         """Run all registered state-changed callbacks.
 
-        The callback dict is snapshotted under the lock and
-        then released **before** any callback executes.  This
-        prevents deadlocks when a callback calls
-        :meth:`get_state_variables` or registers / removes
-        other callbacks.
+        Delegates to :attr:`state_vars`.  The callback dict is
+        snapshotted under the lock and then released **before**
+        any callback executes.  This prevents deadlocks when a
+        callback calls :meth:`get_state_variables` or registers
+        / removes other callbacks.
 
         Exceptions in individual callbacks are logged and
         do not prevent remaining callbacks from running.
         """
-        with self._callbacks_lock:
-            snapshot = list(
-                self._state_changed_callbacks.values(),
-            )
-        for cb in snapshot:
-            try:
-                cb.function(
-                    *(cb.args or []),
-                    **(cb.kwargs or {}),
-                )
-            except Exception:
-                LOGGER.exception(
-                    'Error in state-changed callback.',
-                )
+        self.state_vars.execute_changed_callbacks()
