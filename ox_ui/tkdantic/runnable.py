@@ -50,6 +50,9 @@ from pydantic import BaseModel
 from transitions import Machine
 
 from ox_ui.tkdantic.callbacks import SimpleCallback
+from ox_ui.tkdantic.run_controller import RunController
+from ox_ui.tkdantic.state_variables import StateVariables
+from ox_ui.tkdantic.status_manager import Status
 
 LOGGER = logging.getLogger(__name__)
 
@@ -137,30 +140,74 @@ class RunnableMachineHelper:
     ``pytransitions`` callbacks (``on_enter_<state>``, ``before``,
     ``after``, etc.) which run on the worker thread spawned by
     :class:`StateRunner`.
+
+    Three public attributes expose the cooperative primitives so
+    they can be handed to helper functions or other objects
+    without exposing the full helper:
+
+    * :attr:`status` — a :class:`Status` instance owning the
+      human-readable status text and named headers.
+    * :attr:`controller` — a :class:`RunController` instance
+      owning the pause / cancel events.
+    * :attr:`state_vars` — a :class:`StateVariables` instance
+      owning the user-configurable pydantic model and the
+      callbacks that fire when it is replaced.
+
+    The status-related, control-related, and state-variable
+    methods on this class (:meth:`set_status`, :meth:`pause`,
+    :meth:`wait_if_paused`, :meth:`get_state_variables`, etc.)
+    are thin delegates to those attributes, kept for backward
+    compatibility and to satisfy the :class:`RunnableMachine`
+    protocol.
     """
 
-    def __init__(self) -> None:
-        """Initialise threading primitives and state."""
-        # Set means "running" (not paused).
-        self._pause_event = threading.Event()
-        self._pause_event.set()
+    def __init__(
+        self,
+        status: Optional[Status] = None,
+        controller: Optional[RunController] = None,
+        state_vars: Optional[StateVariables] = None,
+    ) -> None:
+        """Initialise threading primitives and state.
 
-        # Set means "cancel requested".
-        self._cancel_event = threading.Event()
+        :param status: optional :class:`Status` instance to use
+            for the human-readable status text.  If ``None``
+            (the default), a fresh :class:`Status` is created.
+            Pass an existing instance to share a status display
+            between cooperating objects.
+        :param controller: optional :class:`RunController`
+            instance owning the pause / cancel events.  If
+            ``None`` (the default), a fresh :class:`RunController`
+            is created.  Pass an existing instance to share
+            cooperative control between cooperating objects.
+        :param state_vars: optional :class:`StateVariables`
+            instance owning the user-configurable pydantic model
+            and its changed-callbacks.  If ``None`` (the default),
+            a fresh :class:`StateVariables` is created.  Pass an
+            existing instance to share state variables between
+            cooperating objects.
+        """
+        # Cooperative pause / cancel.  Owns its own events.
+        self.controller: RunController = (
+            controller if controller is not None
+            else RunController()
+        )
 
-        # Guards reads/writes of _progress and _status_text.
+        # Guards reads/writes of _progress.
         self._state_lock = threading.Lock()
         self._progress: Optional[float] = None
-        self._status_text: str = ''
-        self._status_before_pause: str = ''
 
-        # State variables: user-configurable pydantic model.
-        self._state_vars: Optional[BaseModel] = None
+        # Human-readable status (raw text + named headers).
+        # Owns its own lock internally.
+        self.status: Status = (
+            status if status is not None else Status()
+        )
 
-        # Callbacks fired when state variables change.
-        self._callbacks_lock = threading.Lock()
-        self._state_changed_callbacks: dict[
-            str, SimpleCallback] = {}
+        # User-configurable pydantic model + changed-callbacks.
+        # Owns its own lock internally.
+        self.state_vars: StateVariables = (
+            state_vars if state_vars is not None
+            else StateVariables()
+        )
 
     # --- abstract (must override) --------------------------------
 
@@ -186,22 +233,25 @@ class RunnableMachineHelper:
     # --- pause / resume / cancel ---------------------------------
 
     def pause(self) -> None:
-        """Request the worker to pause at the next safe point."""
-        self._pause_event.clear()
-        LOGGER.debug('Pause requested.')
+        """Request the worker to pause at the next safe point.
+
+        Delegates to :attr:`controller`.
+        """
+        self.controller.pause()
 
     def resume(self) -> None:
-        """Resume a paused worker."""
-        self._pause_event.set()
-        LOGGER.debug('Resume requested.')
+        """Resume a paused worker.
+
+        Delegates to :attr:`controller`.
+        """
+        self.controller.resume()
 
     def cancel(self) -> None:
-        """Request cooperative cancellation."""
-        # Also resume in case we are paused, so the worker
-        # thread unblocks and can check is_cancelled().
-        self._cancel_event.set()
-        self._pause_event.set()
-        LOGGER.debug('Cancel requested.')
+        """Request cooperative cancellation.
+
+        Delegates to :attr:`controller`.
+        """
+        self.controller.cancel()
 
     # --- progress / status (thread-safe) -------------------------
 
@@ -211,9 +261,18 @@ class RunnableMachineHelper:
             return self._progress
 
     def get_status_text(self) -> str:
-        """Return the current status string."""
-        with self._state_lock:
-            return self._status_text
+        """Return headers (if any) followed by the current status.
+
+        Delegates to :attr:`status`.
+        """
+        return self.status.get_status_text()
+
+    def get_raw_status(self) -> str:
+        """Return just the raw status text, without headers.
+
+        Delegates to :attr:`status`.
+        """
+        return self.status.get_raw_status()
 
     def set_progress(self, value: Optional[float]) -> None:
         """Set progress.  Call from pytransitions callbacks.
@@ -224,75 +283,103 @@ class RunnableMachineHelper:
             self._progress = value
 
     def set_status(self, text: str) -> None:
-        """Set status text.  Call from pytransitions callbacks.
+        """Set the raw status text.  Call from pytransitions callbacks.
+
+        Delegates to :attr:`status`.  This replaces only the raw
+        portion; status headers are unaffected.
 
         :param text: human-readable status message.
         """
-        with self._state_lock:
-            self._status_text = text
+        self.status.set_status(text)
+
+    def append_status(self, text: str) -> None:
+        """Append to the raw status text.
+
+        Delegates to :attr:`status`.
+
+        :param text: text to append (a newline is prepended
+            automatically if the raw status is non-empty).
+        """
+        self.status.append_status(text)
+
+    def add_status_header(self, name: str, text: str) -> None:
+        """Add or replace a named status header.
+
+        Delegates to :attr:`status`.
+
+        :param name: unique key for this header.
+        :param text: header text to display.
+        """
+        self.status.add_status_header(name, text)
+
+    def remove_status_header(self, name: str) -> None:
+        """Remove a status header by name.
+
+        Delegates to :attr:`status`.  Silently ignores unknown
+        names.
+
+        :param name: key passed to :meth:`add_status_header`.
+        """
+        self.status.remove_status_header(name)
 
     # --- worker-thread helpers -----------------------------------
 
     def wait_if_paused(self) -> None:
         """Block until resumed.  Call inside long-running loops.
 
-        Updates the status text to indicate a paused state and
-        restores the previous status on resume.
+        Delegates to :attr:`controller`, passing :attr:`status`
+        so the raw status text is set to ``'Paused.'`` for the
+        duration of the pause and restored on resume.  Status
+        headers are not affected.
         """
-        if self._pause_event.is_set():
-            return
-        previous = self.get_status_text()
-        self.set_status('Paused.')
-        LOGGER.debug('Worker paused.')
-        self._pause_event.wait()
-        LOGGER.debug('Worker resumed.')
-        self.set_status(previous)
+        self.controller.wait_if_paused(self.status)
 
     def is_cancelled(self) -> bool:
-        """Return True if cancellation has been requested."""
-        return self._cancel_event.is_set()
+        """Return True if cancellation has been requested.
+
+        Delegates to :attr:`controller`.
+        """
+        return self.controller.is_cancelled()
 
     def reset_run_state(self) -> None:
-        """Reset pause/cancel/progress for a new transition.
+        """Reset pause/cancel/progress/status for a new transition.
 
         Called by :class:`StateRunner` before spawning the
         worker thread.
         """
-        self._pause_event.set()
-        self._cancel_event.clear()
+        self.controller.reset()
         with self._state_lock:
             self._progress = None
-            self._status_text = ''
+        self.status.clear()
 
     # --- state variables -----------------------------------------
 
     def get_state_variables(self) -> Optional[BaseModel]:
         """Return a deep copy of the current state variables.
 
-        Returns ``None`` if this machine has no user-configurable
-        variables (the default).  The returned instance is a
-        **snapshot**; callers should not mutate it.
+        Delegates to :attr:`state_vars`.  Returns ``None`` if
+        this machine has no user-configurable variables (the
+        default).  The returned instance is a **snapshot**;
+        callers should not mutate it.
         """
-        if self._state_vars is None:
-            return None
-        return self._state_vars.model_copy(deep=True)
+        return self.state_vars.get()
 
     def set_state_variables(
         self, variables: BaseModel,
     ) -> None:
         """Replace the current state variables wholesale.
 
-        A deep copy of *variables* is stored so the caller
-        retains no shared reference.  After storing, all
-        registered state-changed callbacks are executed.
+        Delegates to :attr:`state_vars`.  A deep copy of
+        *variables* is stored so the caller retains no shared
+        reference.  After storing, all registered state-changed
+        callbacks are executed.
 
         Callers should only invoke this when the machine is
         idle or paused.
 
         :param variables: validated pydantic model instance.
         """
-        self._state_vars = variables.model_copy(deep=True)
-        self.execute_state_changed_callbacks()
+        self.state_vars.set(variables)
 
     # --- state-changed callbacks ---------------------------------
 
@@ -301,48 +388,35 @@ class RunnableMachineHelper:
     ) -> None:
         """Register a named callback for state-variable changes.
 
-        If *name* already exists it is replaced.
+        Delegates to :attr:`state_vars`.  If *name* already
+        exists it is replaced.
 
         :param name: unique key for this callback.
         :param callback: :class:`SimpleCallback` to invoke.
         """
-        with self._callbacks_lock:
-            self._state_changed_callbacks[name] = callback
+        self.state_vars.add_changed_callback(name, callback)
 
     def remove_state_changed_callback(self, name: str) -> None:
         """Remove a previously registered callback by name.
 
-        Silently ignores unknown names.
+        Delegates to :attr:`state_vars`.  Silently ignores
+        unknown names.
 
         :param name: the key passed to
             :meth:`add_state_changed_callback`.
         """
-        with self._callbacks_lock:
-            self._state_changed_callbacks.pop(name, None)
+        self.state_vars.remove_changed_callback(name)
 
     def execute_state_changed_callbacks(self) -> None:
         """Run all registered state-changed callbacks.
 
-        The callback dict is snapshotted under the lock and
-        then released **before** any callback executes.  This
-        prevents deadlocks when a callback calls
-        :meth:`get_state_variables` or registers / removes
-        other callbacks.
+        Delegates to :attr:`state_vars`.  The callback dict is
+        snapshotted under the lock and then released **before**
+        any callback executes.  This prevents deadlocks when a
+        callback calls :meth:`get_state_variables` or registers
+        / removes other callbacks.
 
         Exceptions in individual callbacks are logged and
         do not prevent remaining callbacks from running.
         """
-        with self._callbacks_lock:
-            snapshot = list(
-                self._state_changed_callbacks.values(),
-            )
-        for cb in snapshot:
-            try:
-                cb.function(
-                    *(cb.args or []),
-                    **(cb.kwargs or {}),
-                )
-            except Exception:
-                LOGGER.exception(
-                    'Error in state-changed callback.',
-                )
+        self.state_vars.execute_changed_callbacks()

@@ -17,7 +17,7 @@ def commands_for_cls(klass):
 
     result = []
     for name, method in inspect.getmembers(
-            klass, predicate=inspect.isfunction):
+            klass, predicate=inspect.isroutine):
         pydantic_params = getattr(method, '_pydantic_params', None)
         if pydantic_params is not None:
             assert len(pydantic_params) <= 1, 'Cannot handle multi-params'

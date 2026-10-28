@@ -39,14 +39,17 @@ LOGGER = _rawLogging.getLogger(__name__)
 #   scalar fields : (spec, tk_variable)
 #   model  fields : ("__model__", sub_widget_tree)
 #   model_list    : ("__model_list__", _LegSection)
+#   scalar_list   : ("__scalar_list__", _ScalarListWidget)
 #
-# The sentinel strings "__model__" and "__model_list__" in
-# position 0 distinguish nested entries from scalar (spec, var)
-# tuples, since a spec dict will never equal those strings.
+# The sentinel strings "__model__", "__model_list__", and
+# "__scalar_list__" in position 0 distinguish nested entries
+# from scalar (spec, var) tuples, since a spec dict will never
+# equal those strings.
 # -------------------------------------------------------------------
 
 _MODEL_TAG = "__model__"
 _MODEL_LIST_TAG = "__model_list__"
+_SCALAR_LIST_TAG = "__scalar_list__"
 
 
 # -------------------------------------------------------------------
@@ -210,6 +213,35 @@ def _place_scalar_widget(parent, spec, *, row, label_col, widget_col,
         chk = ttk.Checkbutton(parent, variable=var)
         chk.grid(row=row, column=widget_col,
                  sticky="w", pady=2, padx=(0, 8))
+
+    elif gui_type == "filepath":
+        var = tk.StringVar(value=spec.get("default", ""))
+        width = 15 if compact else 32
+        cell = ttk.Frame(parent)
+        cell.grid(row=row, column=widget_col,
+                  sticky="ew", pady=2, padx=(0, 8))
+        entry = ttk.Entry(cell, textvariable=var, width=width)
+        entry.pack(side="left", fill="x", expand=True)
+
+        mode = spec.get("mode", "save")
+        filetypes = spec.get("filetypes", [("All files", "*.*")])
+        defaultext = spec.get("defaultextension", "")
+
+        def _browse(_var=var, _mode=mode, _ft=filetypes,
+                    _de=defaultext):
+            if _mode == "open":
+                path = filedialog.askopenfilename(
+                    parent=parent, filetypes=_ft)
+            else:
+                path = filedialog.asksaveasfilename(
+                    parent=parent, filetypes=_ft,
+                    defaultextension=_de)
+            if path:
+                _var.set(path)
+
+        btn = ttk.Button(cell, text="Browse\u2026", command=_browse,
+                         width=8)
+        btn.pack(side="left", padx=(4, 0))
 
     else:  # str, int, float
         var = tk.StringVar(value=spec.get("default", ""))
@@ -381,9 +413,141 @@ def _place_model_list(
     return _MODEL_LIST_TAG, section
 
 
+# -------------------------------------------------------------------
+# Scalar list widget (List[str], List[int], List[float])
+# -------------------------------------------------------------------
+
+_SCALAR_LIST_CASTERS = {
+    "int": int,
+    "float": float,
+    "str": str,
+}
+
+
+class _ScalarListWidget:
+    """A multi-line text area for ``List[scalar]`` fields.
+
+    Each non-blank line is one list element.  A status label
+    below the text area shows per-line validation errors for
+    the configured *inner_type* (``"int"``, ``"float"``, or
+    ``"str"``).
+    """
+
+    def __init__(self, parent, spec):
+        self.inner_type = spec.get("inner_type", "str")
+        self._caster = _SCALAR_LIST_CASTERS.get(
+            self.inner_type, str)
+
+        help_text = spec.get("help", "")
+        lbl = ttk.Label(
+            parent,
+            text=f"  {spec['name']}  (one per line)  ",
+            font=("TkDefaultFont", 9, "bold"),
+        )
+        if help_text:
+            add_tooltip(lbl, help_text)
+
+        self._outer = ttk.LabelFrame(parent, labelwidget=lbl,
+                                     padding=6)
+        self._outer.pack(fill="x")
+
+        self._text = scrolledtext.ScrolledText(
+            self._outer, height=5, wrap="word",
+            font=("Consolas", 10))
+        self._text.pack(fill="x")
+
+        default = spec.get("default", "")
+        if default:
+            self._text.insert("1.0", default)
+
+        self._error_label = ttk.Label(
+            self._outer, text="", foreground="red",
+            wraplength=500, justify="left")
+        self._error_label.pack(fill="x", anchor="w")
+
+        # Validate on focus-out
+        self._text.bind("<FocusOut>", lambda _e: self._validate())
+
+    def _raw_lines(self):
+        """Return non-blank lines from the text area."""
+        text = self._text.get("1.0", "end").strip()
+        if not text:
+            return []
+        return [ln for ln in text.splitlines() if ln.strip()]
+
+    def _validate(self):
+        """Check each line against the inner type.
+
+        Updates the error label with any problems found.
+        """
+        errors = []
+        for i, line in enumerate(self._raw_lines(), 1):
+            try:
+                self._caster(line.strip())
+            except (ValueError, TypeError):
+                errors.append(
+                    f"Line {i}: {line.strip()!r} is not a "
+                    f"valid {self.inner_type}")
+        if errors:
+            self._error_label.config(text="\n".join(errors))
+        else:
+            self._error_label.config(text="")
+        return errors
+
+    def collect(self):
+        """Return a list of cast values.
+
+        Raises :class:`ValueError` if any line fails to cast.
+        """
+        result = []
+        errors = []
+        for i, line in enumerate(self._raw_lines(), 1):
+            try:
+                result.append(self._caster(line.strip()))
+            except (ValueError, TypeError) as exc:
+                errors.append(
+                    f"Line {i}: {line.strip()!r} — {exc}")
+        if errors:
+            msg = "\n".join(errors)
+            self._error_label.config(text=msg)
+            raise ValueError(msg)
+        self._error_label.config(text="")
+        return result
+
+    def load(self, items):
+        """Replace the text area contents from a list."""
+        self._text.delete("1.0", "end")
+        if isinstance(items, list):
+            self._text.insert(
+                "1.0", "\n".join(str(v) for v in items))
+
+
+def _place_scalar_list(
+    parent: ttk.Frame,
+    spec: dict,
+    *,
+    row: int,
+    columnspan: int,
+    max_horizontal: int,
+) -> tuple:
+    """Create a ``_ScalarListWidget`` for a ``List[scalar]`` field.
+
+    Returns a ``(_SCALAR_LIST_TAG, widget)`` tuple.
+    """
+    container = ttk.Frame(parent)
+    container.grid(
+        row=row, column=0,
+        columnspan=columnspan,
+        sticky="ew", pady=4,
+    )
+    widget = _ScalarListWidget(container, spec)
+    return _SCALAR_LIST_TAG, widget
+
+
 _NESTED_PLACERS: dict[str, Callable] = {
     "model": _place_nested_model,
     "model_list": _place_model_list,
+    "scalar_list": _place_scalar_list,
 }
 
 
@@ -472,6 +636,12 @@ def collect_values(widgets, path=()):
                 result[name] = section.collect_all()
                 continue
 
+            # List of scalars
+            if entry[0] == _SCALAR_LIST_TAG:
+                widget = entry[1]
+                result[name] = widget.collect()
+                continue
+
             # Scalar field: entry is (spec, var)
             spec, var = entry
             raw = var.get()
@@ -538,6 +708,13 @@ def load_values(widgets, data):
             section = entry[1]
             if isinstance(value, list):
                 section.load_all(value)
+            continue
+
+        # List of scalars
+        if entry[0] == _SCALAR_LIST_TAG:
+            widget = entry[1]
+            if isinstance(value, list):
+                widget.load(value)
             continue
 
         # Scalar field: entry is (spec, var)
