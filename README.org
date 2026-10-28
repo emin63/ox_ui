@@ -7,6 +7,10 @@ For example, =ox_ui= lets you take a command defined using the =click=
 library and convert it to something you can run in a Flask web server
 as discussed in the [[#click-to-wtforms][Click to WTForms]] section.
 
+The =ox_ui.tkdantic= package builds a command-line interface, a
+tkinter GUI and an XML-RPC client from pydantic models, as discussed
+in the [[#tkdantic][Pydantic models to CLI and GUI]] section.
+
 * Click to WTForms
   :PROPERTIES:
   :CUSTOM_ID: click-to-wtforms
@@ -57,6 +61,123 @@ introspects =hello_cmd=, creates a web form using the =WTForms=
 library and handles the command.
 
 See examples in the =tests= directory for more details.
+
+* Pydantic models to CLI and GUI (tkdantic)
+  :PROPERTIES:
+  :CUSTOM_ID: tkdantic
+  :END:
+
+The =ox_ui.tkdantic= package lets you describe a command's arguments
+once, as a pydantic model, and get a command-line interface and a
+tkinter GUI for it. Field types, defaults, descriptions and
+validators come from the model, so the CLI, the GUI and a server all
+check the arguments the same way. Nested models become groups of
+options and lists of models become repeatable entries.
+
+You mark the methods of a class with =@pydantic_method=. Each takes
+one argument, a pydantic model:
+
+#+BEGIN_SRC python
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from ox_ui.tkdantic.inspector import pydantic_method
+
+
+class Trip(BaseModel):
+    """A trip to plan."""
+
+    city: str = Field(description='Destination city.')
+    seats: int = Field(default=1, gt=0, description='Seats to reserve.')
+    transport: Literal['train', 'bus'] = 'train'
+    dry_run: bool = Field(default=False, description=(
+        'Check the trip but do not reserve anything.'))
+
+
+class Planner:
+    """Commands for a pretend trip planner."""
+
+    @pydantic_method
+    def plan_trip(self, params: Trip):
+        """Plan a trip."""
+        return f'{params.seats} by {params.transport} to {params.city}'
+#+END_SRC
+
+** Command line
+
+=click_group_from_cls= makes a =click= group with one command per
+marked method and one option per field:
+
+#+BEGIN_SRC python
+from ox_ui.tkdantic.cli_builder import click_group_from_cls
+
+if __name__ == '__main__':
+    click_group_from_cls(Planner, name='planner')()
+#+END_SRC
+
+#+BEGIN_SRC sh
+$ python planner.py plan_trip --city Oslo --seats 5
+5 by train to Oslo
+$ python planner.py plan_trip --city Oslo --seats 0
+Error: 1 validation error for Trip
+seats
+  Input should be greater than 0 ...
+#+END_SRC
+
+A nested model's fields become dotted options such as
+=--address.city=. A boolean gets an on and an off flag
+(=--dry-run= and =--no-dry-run=). Every command also has these
+options:
+
+- =--params FILE= starts from the values in a JSON file, such as one
+  saved with the GUI's Dump button. Options given on the command line
+  replace the file's values.
+- =--show-params= prints the final parameters as JSON and exits
+  without running the command.
+- =--rpc-url URL= sends the command to an XML-RPC server instead of
+  running it locally, and waits for its result. =--rpc-timeout SECS=
+  limits the wait. Giving up does not stop the command on the server.
+
+#+BEGIN_SRC sh
+$ cat trip.json
+{"city": "Oslo", "seats": 5, "transport": "bus"}
+$ python planner.py plan_trip --params trip.json --seats 2
+2 by bus to Oslo
+$ python planner.py plan_trip --params trip.json --rpc-url 127.0.0.1:8765
+5 by bus to Oslo
+#+END_SRC
+
+** Server and GUI
+
+A =@pydantic_method= also accepts its model as a JSON string, so an
+instance of the class can be served with the standard library's
+XML-RPC server:
+
+#+BEGIN_SRC python
+from xmlrpc.server import SimpleXMLRPCServer
+
+server = SimpleXMLRPCServer(('127.0.0.1', 8765), allow_none=True)
+server.register_instance(Planner())
+server.serve_forever()
+#+END_SRC
+
+=MainApp= is a GUI client for such a server. It shows one button per
+command. Each button opens a form with a widget per field, and the
+form's Submit button validates the values and sends them to the
+server at the URL shown in the window:
+
+#+BEGIN_SRC python
+from ox_ui.tkdantic.builder import MainApp
+from ox_ui.tkdantic.inspector import commands_for_cls
+
+commands = {c.title: c for c in commands_for_cls(Planner)}
+MainApp(title='Planner', model_commands=commands).mainloop()
+#+END_SRC
+
+The package also has =StateRunnerWindow=, a GUI for driving
+=transitions= state machines with long-running steps; see
+=ox_ui/tkdantic/STATE_RUNNER_README.md=.
 
 * Other Utilities
 
