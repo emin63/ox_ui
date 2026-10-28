@@ -161,9 +161,9 @@ Example usage::
         # only group 1 (the digits) gets tagged.
         (r"connections: ([1-9]\\d*)",
          {"background": "lightblue"}),
-        # Highlight a non-zero fill count on a
-        # "fills / cancels / orders:" line.
-        (r"fills / cancels / orders: ([1-9]\\d*)",
+        # Highlight a non-zero warning count on a
+        # "warnings / errors / skipped:" line.
+        (r"warnings / errors / skipped: ([1-9]\\d*)",
          {"background": "lightblue"}),
         # Highlight the value after "status: " only when
         # the line also contains "Database".
@@ -426,7 +426,7 @@ class SimpleStatusDisplay(tk.Toplevel):
                 self._bind_click(tag_name, on_click)
 
         # Set priority: heading lowest, then highlights in
-        # reverse order so index 0 ends up highest.
+        # reverse, so index 0 ends up highest.
         self._text.tag_lower(_HEADING_TAG)
         for _pattern, tag_name, _config, _cb in reversed(
             self._highlights

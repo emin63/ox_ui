@@ -5,7 +5,6 @@ These tests exercise :class:`StateRunner` and
 All tests use pytest conventions.
 """
 
-import threading
 import time
 
 import pytest

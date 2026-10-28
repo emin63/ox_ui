@@ -10,7 +10,7 @@ progress reporting, and status logging.
 |------|---------|
 | `ox_ui/tkdantic/runnable.py` | `RunnableMachine` Protocol and `RunnableMachineHelper` base class |
 | `ox_ui/tkdantic/state_runner.py` | `StateRunner` controller, `StateRunnerWindow` GUI, `DiagramWindow` placeholder |
-| `tests/text/test_state_runner.py` | 24 pytest tests covering logic (no GUI tests) |
+| `tests/tkdantic/test_state_runner.py` | 24 pytest tests covering logic (no GUI tests) |
 
 ## Quick Start
 
@@ -237,7 +237,7 @@ for bold, colour, etc.
 Run tests with:
 
 ```bash
-python -m pytest tests/text/test_state_runner.py -v
+python -m pytest tests/tkdantic/test_state_runner.py -v
 ```
 
 24 tests cover:

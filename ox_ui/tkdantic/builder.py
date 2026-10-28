@@ -38,7 +38,7 @@ LOGGER = _rawLogging.getLogger(__name__)
 #
 #   scalar fields : (spec, tk_variable)
 #   model  fields : ("__model__", sub_widget_tree)
-#   model_list    : ("__model_list__", _LegSection)
+#   model_list    : ("__model_list__", _ModelListSection)
 #   scalar_list   : ("__scalar_list__", _ScalarListWidget)
 #
 # The sentinel strings "__model__", "__model_list__", and
@@ -61,8 +61,8 @@ def add_tooltip(widget, text, delay_ms=400, wrap_px=300):
 
     Usage::
 
-        label = ttk.Label(parent, text="price")
-        add_tooltip(label, "Limit price for the order.")
+        label = ttk.Label(parent, text="speed")
+        add_tooltip(label, "Average speed in km/h.")
     """
     state = {"tip_window": None, "after_id": None}
 
@@ -396,7 +396,7 @@ def _place_model_list(
     columnspan: int,
     max_horizontal: int,
 ) -> tuple:
-    """Create a ``_LegSection`` for a ``List[SubModel]`` field.
+    """Create a ``_ModelListSection`` for a ``List[SubModel]`` field.
 
     Returns a ``(_MODEL_LIST_TAG, section)`` tuple.
     """
@@ -406,7 +406,7 @@ def _place_model_list(
         columnspan=columnspan,
         sticky="ew", pady=4,
     )
-    section = _LegSection(
+    section = _ModelListSection(
         container, spec["model"],
         max_horizontal=max_horizontal,
     )
@@ -564,7 +564,7 @@ def build_fields_in_frame(
 
     Sub-model fields get their own ``LabelFrame``;
     ``List[SubModel]`` fields support dynamic add/remove of
-    repeated sub-frames (legs).  All nesting is handled
+    repeated sub-frames (entries).  All nesting is handled
     recursively by build_fields_in_frame.
 
     Layout tiers for scalar (non-model) fields, based on count
@@ -723,20 +723,20 @@ def load_values(widgets, data):
 
 
 # -------------------------------------------------------------------
-# Dynamic list-of-models section (e.g. order legs)
+# Dynamic list-of-models section (e.g. a list of addresses)
 # -------------------------------------------------------------------
 
-class _LegSection:
+class _ModelListSection:
     """Manages a dynamic list of sub-model frames.
 
-    Uses build_fields_in_frame recursively so legs can themselves
+    Uses build_fields_in_frame recursively so entries can themselves
     contain nested sub-models.  Starts with one instance.
     """
 
     def __init__(self, parent, model_class, max_horizontal=4):
         self.model_class = model_class
         self._max_horizontal = max_horizontal
-        self._legs = []  # list of (frame, widget_tree)
+        self._entries = []  # list of (frame, widget_tree)
 
         model_doc = (model_class.__doc__ or "").strip()
         lbl = ttk.Label(
@@ -757,11 +757,11 @@ class _LegSection:
         btn_row.pack(fill="x", pady=(0, 4))
         ttk.Button(
             btn_row, text="+ Add",
-            command=self._add_leg,
+            command=self._add_entry,
         ).pack(side="left")
         ttk.Button(
             btn_row, text="\u2212 Remove Last",
-            command=self._remove_leg,
+            command=self._remove_entry,
         ).pack(side="left", padx=(6, 0))
         self._count_label = ttk.Label(btn_row, text="")
         self._count_label.pack(side="left", padx=8)
@@ -790,19 +790,19 @@ class _LegSection:
         self._container.pack(fill="x")
 
         # Start with one entry
-        self._add_leg()
+        self._add_entry()
 
     def _update_count(self):
-        n = len(self._legs)
+        n = len(self._entries)
         self._count_label.config(text=f"({n} item(s))")
 
-    def _add_leg(self):
-        idx = len(self._legs) + 1
+    def _add_entry(self):
+        idx = len(self._entries) + 1
         model_doc = (
             self.model_class.__doc__ or ""
         ).strip()
 
-        # Per-leg Load / Dump: use a holder so callbacks work
+        # Per-entry Load / Dump: use a holder so callbacks work
         # even though the widget tree is built after the frame.
         holder = {}
         header_menu_items = [
@@ -831,30 +831,30 @@ class _LegSection:
             max_horizontal=self._max_horizontal,
         )
         holder["tree"] = widget_tree
-        self._legs.append((frame, widget_tree))
+        self._entries.append((frame, widget_tree))
         self._update_count()
 
-    def _remove_leg(self):
-        if len(self._legs) <= 1:
+    def _remove_entry(self):
+        if len(self._entries) <= 1:
             return  # keep at least one
-        frame, _ = self._legs.pop()
+        frame, _ = self._entries.pop()
         frame.destroy()
         self._update_count()
 
     def collect_all(self):
         """Return a list of plain dicts, one per entry."""
-        return [collect_values(wt) for _, wt in self._legs]
+        return [collect_values(wt) for _, wt in self._entries]
 
     def load_all(self, items: list[dict]):
-        """Clear legs and recreate from *items*."""
-        while self._legs:
-            frame, _ = self._legs.pop()
+        """Clear entries and recreate from *items*."""
+        while self._entries:
+            frame, _ = self._entries.pop()
             frame.destroy()
         self._update_count()
 
         for item in items:
-            self._add_leg()
-            _, widget_tree = self._legs[-1]
+            self._add_entry()
+            _, widget_tree = self._entries[-1]
             load_values(widget_tree, item)
 
     # -- List-level Dump / Load ---------------------------------
@@ -893,7 +893,7 @@ class _LegSection:
             LOGGER.error("List dump file error: %s", exc)
 
     def _load_list(self):
-        """Load a JSON array to replace all current legs."""
+        """Load a JSON array to replace all current entries."""
         path = filedialog.askopenfilename(
             parent=self._container,
             title=f"Load {self.model_class.__name__} list from JSON",
@@ -972,7 +972,7 @@ class ModelCommandWindow(tk.Toplevel):
 
     Sub-models each get their own labelled frame;
     ``List[SubModel]`` fields support dynamic add/remove of
-    repeated sub-frames (legs).  All nesting is handled
+    repeated sub-frames (entries).  All nesting is handled
     recursively by :func:`build_fields_in_frame`.
     """
 
@@ -1049,20 +1049,20 @@ class ModelCommandWindow(tk.Toplevel):
             return
 
         try:
-            order = self.model_class.model_validate(raw_payload)
+            instance = self.model_class.model_validate(raw_payload)
         except ValidationError as exc:
             self._show_result(f"VALIDATION ERROR:\n{exc}")
             return
 
         path = filedialog.asksaveasfilename(
-            parent=self, title="Save order as JSON", defaultextension=".json",
+            parent=self, title="Save parameters as JSON", defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*"),])
         if not path:
             return
 
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(order.model_dump_json(indent=2))
+                f.write(instance.model_dump_json(indent=2))
             self._show_result(f"Saved to {path}")
         except OSError as exc:
             self._show_result(f"FILE ERROR: {exc}")
@@ -1071,7 +1071,7 @@ class ModelCommandWindow(tk.Toplevel):
         """Load a previously-dumped JSON file into the form."""
         path = filedialog.askopenfilename(
             parent=self,
-            title="Load order from JSON",
+            title="Load parameters from JSON",
             filetypes=[
                 ("JSON files", "*.json"),
                 ("All files", "*.*"),
@@ -1111,13 +1111,13 @@ class ModelCommandWindow(tk.Toplevel):
             return
 
         try:
-            order = self.model_class.model_validate(raw_payload)
+            instance = self.model_class.model_validate(raw_payload)
         except ValidationError as exc:
             self._show_result(f"VALIDATION ERROR:\n{exc}")
             return
 
         if self.command.callback is not None:
-            result = self.command.callback(order)
+            result = self.command.callback(instance)
             self._on_call_done(result)
             return
 
@@ -1131,7 +1131,7 @@ class ModelCommandWindow(tk.Toplevel):
 
         timeout = self._server_config["timeout_var"].get()
         call_thread = SimpleRPCCall(
-            url=url, command_name=self.command.name, cmd_args=order,
+            url=url, command_name=self.command.name, cmd_args=instance,
             rpc_timeout=timeout)
         call_thread.after = TimedCallback(
             interval=0, function=self._on_call_done, args=[call_thread])
