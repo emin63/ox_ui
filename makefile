@@ -19,7 +19,8 @@ build: README.rst
 	uv build
 
 pypi: test build  ## Push project to pypi
-	uv publish
+	uvx twine check dist/*
+	uvx twine upload dist/*
 
 release:
 	uv run ox_ui release $(REMOTE)
