@@ -1,0 +1,59 @@
+[project]
+name = "ox_ui"
+# The version is read from src/ox_ui/__init__.py (see
+# [tool.hatch.version] below).
+dynamic = ["version"]
+description = "Simple user interface tools for python"
+readme = "README.rst"
+requires-python = ">=3.11"
+license = "BSD-2-Clause"
+license-files = ["LICENSE.txt"]
+authors = [{ name = "Emin Martinian", email = "emin.martinian@gmail.com" }]
+keywords = ["flask", "click", "ui"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "click",
+    "flask",
+    "flask-wtf",
+    "jinja2",
+    "pydantic>=2",
+    "python-dateutil",
+    "requests",
+    "transitions",
+    "wrapt",
+]
+
+[project.urls]
+Homepage = "https://github.com/emin63/ox_ui"
+
+[project.scripts]
+ox_ui = "ox_ui.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "uv",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/ox_ui/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ox_ui"]
+
+[tool.uv]
+# Rebuild the editable package when its version changes: the
+# version lives in __init__.py, which uv does not watch by default.
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/ox_ui/__init__.py" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "src/ox_ui"]
+addopts = "--doctest-modules"

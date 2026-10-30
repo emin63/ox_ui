@@ -127,14 +127,14 @@ A nested model's fields become dotted options such as
 ``--address.city``. A boolean gets an on and an off flag (``--dry-run``
 and ``--no-dry-run``). Every command also has these options:
 
-- ``--params FILE`` starts from the values in a JSON file, such as one
-  saved with the GUI's Dump button. Options given on the command line
-  replace the file's values.
-- ``--show-params`` prints the final parameters as JSON and exits
-  without running the command.
-- ``--rpc-url URL`` sends the command to an XML-RPC server instead of
-  running it locally, and waits for its result. ``--rpc-timeout SECS``
-  limits the wait. Giving up does not stop the command on the server.
+-  ``--params FILE`` starts from the values in a JSON file, such as one
+   saved with the GUI's Dump button. Options given on the command line
+   replace the file's values.
+-  ``--show-params`` prints the final parameters as JSON and exits
+   without running the command.
+-  ``--rpc-url URL`` sends the command to an XML-RPC server instead of
+   running it locally, and waits for its result. ``--rpc-timeout SECS``
+   limits the wait. Giving up does not stop the command on the server.
 
 .. code:: bash
 
@@ -175,15 +175,68 @@ at the URL shown in the window:
 
 The package also has ``StateRunnerWindow``, a GUI for driving
 ``transitions`` state machines with long-running steps; see
-``ox_ui/tkdantic/STATE_RUNNER_README.md``.
+``src/ox_ui/tkdantic/STATE_RUNNER_README.md``.
 
 Other Utilities
 ===============
 
 A few additional utilites are provided in the
-``ox_ui/core/decorators.py`` module including a ``watched`` decorator to
-log the start/end of functions, a ``setup_flask_watch`` function which
-applies the ``watched`` decorator to allow your routes using the
-``before_request`` and ``teardown_request`` hooks in flask, and a
-``LockFile`` context decorator for easily adding lock files to any
+``src/ox_ui/core/decorators.py`` module including a ``watched``
+decorator to log the start/end of functions, a ``setup_flask_watch``
+function which applies the ``watched`` decorator to allow your routes
+using the ``before_request`` and ``teardown_request`` hooks in flask,
+and a ``LockFile`` context decorator for easily adding lock files to any
 function or context.
+
+Tagging releases (``ox_ui release``)
+====================================
+
+Installing ``ox_ui`` also installs an ``ox_ui`` command. Its ``release``
+subcommand tags a release of the git repository you run it in and pushes
+it:
+
+.. code:: bash
+
+   ox_ui release origin    # tag v<version> and push it to the remote "origin"
+   ox_ui release all       # the same for every remote
+   ox_ui release           # list the remotes and do nothing
+
+It reads the package version from ``pyproject.toml``: a static
+``[project] version``, or for a dynamic version the file named by
+``[tool.hatch.version] path`` or by setuptools' ``attr`` or ``file``.
+That file must assign ``__version__`` or ``VERSION``. Use
+``--version-file PATH`` for other layouts. Then it:
+
+#. requires a version of the form ``X.Y.Z`` that is above the latest
+   ``v*`` tag on the branch;
+#. requires the ``main`` or ``master`` branch with no uncommitted
+   changes to tracked files;
+#. checks each chosen remote: its branch must be the same as the local
+   one or behind it, and a ``v<version>`` tag it already has must be on
+   this commit;
+#. shows what it will do and asks first (``--yes`` skips the question);
+#. creates the annotated tag ``v<version>`` if needed and pushes the
+   branch (fast-forward only) and that one tag to each chosen remote,
+   then reads the tag back.
+
+It never forces a push, never moves a tag, and pushes no other branches
+or tags. Running it again after a failure skips the steps that are done.
+
+Development
+===========
+
+The project uses `uv <https://docs.astral.sh/uv/>`__; ``uv`` is also a
+dev dependency, so ``uv sync`` followed by ``.venv/bin/uv`` works
+without a separate install.
+
+.. code:: bash
+
+   uv sync                  # create .venv with ox_ui and its dev tools
+   xvfb-run -a make test    # run the tests (xvfb-run only without a display)
+   make build               # build the sdist and wheel into dist/
+   make pypi                # test, build and upload with uv publish
+   make release REMOTE=all  # same as: uv run ox_ui release all
+
+The version is ``__version__`` in ``src/ox_ui/__init__.py`` (the only
+place it is written; ``pyproject.toml`` reads it). Changes per version
+are in ``docs/CHANGELOG.org``.

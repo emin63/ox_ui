@@ -1,0 +1,40 @@
+#+TITLE: Change log for ox_ui
+#+OPTIONS: ^:{}
+
+* Introduction
+
+This file records notable changes to =ox_ui= for each released
+version, most recent first, starting with 0.5.0 (earlier versions:
+the git history).  Changes merged but not yet released go under an
+=Unreleased= heading at the top, which becomes the version's heading
+when it is released.
+
+The version is =__version__= in =src/ox_ui/__init__.py=.  Releases
+are tagged =v<version>= with =ox_ui release= (see "Tagging releases"
+in =README.org=).
+
+* 0.5.0
+
+** Changes
+
+  - Packaging: =pyproject.toml= (hatchling) replaces =setup.py=,
+    =requirements.txt= and =MANIFEST.in=, and the package moved to a
+    src layout (=src/ox_ui=).  Development uses uv (=uv sync=, with
+    =uv= itself a dev dependency); =make pypi= uploads with =uv
+    publish= instead of twine.
+  - Dependencies are now declared in full: =pydantic= (used by
+    =ox_ui.tkdantic= but missing before), =transitions= (listed as
+    =pytransitions= before), and =jinja2= (imported directly).
+    =pytest= is now a dev dependency only.  Python 3.11 or newer is
+    required.
+  - New =ox_ui= command with a =release= subcommand that tags
+    =v<version>= on =main= or =master= and pushes the branch and tag
+    to one or all git remotes, with checks (see =README.org=).
+  - =ox_ui.__version__= is the version; =ox_ui.VERSION= remains as an
+    alias.
+  - The license metadata now says BSD-2-Clause, matching
+    =LICENSE.txt= (it said "custom" before).
+
+** Status
+
+The test suite (=xvfb-run -a make test=) passes.
