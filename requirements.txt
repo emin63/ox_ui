@@ -1,7 +1,0 @@
-requests
-python-dateutil
-flask
-flask-wtf
-wrapt
-click
-pytransitions

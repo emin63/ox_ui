@@ -12,15 +12,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-
+    - uses: actions/checkout@v4
 
     - name: Install tkinter and Xvfb
       run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
 
-    - name: Install dependancies
-      run: pip install -r requirements.txt && pip install -e . && pip install pydantic
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Install dependencies
+      run: uv sync --locked
 
     - name: Run tests
       run: xvfb-run -a make test
-
