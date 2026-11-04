@@ -27,6 +27,10 @@ class Command(BaseModel):
     # touch Tk themselves; the default runs it in the GUI's thread.
     background: bool = False
 
+    # The tab of MainApp the command's button is on.  When no command
+    # has a group, MainApp shows one plain list of buttons, as before.
+    group: Optional[str] = None
+
     @model_validator(mode='after')
     def validate_cmd(self) -> Self:
         "Simple validator to use title to figure out name if necessary."

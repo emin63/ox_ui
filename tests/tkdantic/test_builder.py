@@ -1120,3 +1120,58 @@ class TestMainApp:
         """A command with two parameter models is refused."""
         with pytest.raises(ValueError, match='parameters !=1'):
             main_app._open_command(MAIN_COMMANDS['double'])
+
+
+GROUPED_COMMANDS = {
+    'small': Command(title='Make Small', parameters=[Small],
+                     description='Takes a Small model.', group='jobs'),
+    'stop': Command(title='Stop It', parameters=[Stop],
+                    description='Takes a Stop.', group='tools'),
+    'loose': Command(title='Loose', parameters=[Small],
+                     description='No group.'),
+    'more': Command(title='More Jobs', parameters=[Small],
+                    description='Second job.', group='jobs'),
+}
+
+
+class TestCommandGroups:
+    """Tests for :func:`command_groups` and MainApp's tabs."""
+
+    def test_no_groups_is_one_list(self):
+        """Without groups the only key is None, in the given order."""
+        groups = builder.command_groups(MAIN_COMMANDS)
+        assert list(groups) == [None]
+        assert [key for key, _ in groups[None]] == [
+            'small', 'plain', 'double']
+
+    def test_groups_in_first_seen_order_other_last(self):
+        """Groups keep their first-seen order; ungrouped is last."""
+        groups = builder.command_groups(GROUPED_COMMANDS)
+        assert list(groups) == ['jobs', 'tools', 'Other']
+        assert [key for key, _ in groups['jobs']] == ['small', 'more']
+        assert [key for key, _ in groups['Other']] == ['loose']
+
+    def test_tabs(self):
+        """MainApp shows one tab per group with its buttons."""
+        try:
+            app = MainApp('Grouped', GROUPED_COMMANDS)
+        except tk.TclError as exc:
+            pytest.skip(f'No display available for Tk: {exc}')
+        try:
+            app.withdraw()
+            notebook = app._notebook
+            tabs = [notebook.tab(tab, 'text') for tab in notebook.tabs()]
+            assert tabs == ['jobs', 'tools', 'Other']
+            jobs = app.nametowidget(notebook.tabs()[0])
+            assert [str(b.cget('text')) for b in
+                    find_widgets(jobs, ttk.Button)] == [
+                        'Make Small', 'More Jobs']
+            find_widgets(app, ttk.Button, 'Stop It')[0].invoke()
+            windows = find_widgets(app, ModelCommandWindow)
+            assert [w.model_class for w in windows] == [Stop]
+        finally:
+            app.destroy()
+
+    def test_no_groups_no_tabs(self, main_app):
+        """Without groups there is no notebook (as before 0.6.0)."""
+        assert not find_widgets(main_app, ttk.Notebook)

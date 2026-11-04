@@ -1255,6 +1255,28 @@ class ModelCommandWindow(tk.Toplevel):
         self._result_text.config(state="disabled")
 
 
+def command_groups(model_commands, other="Other"):
+    """*model_commands* ({key: Command}) split by ``Command.group``.
+
+    Returns {group: [(key, command), ...]}, the groups in the order
+    they first appear.  When no command has a group the only key is
+    ``None``; otherwise commands without a group are under *other*,
+    last.
+    """
+    groups = {}
+    ungrouped = []
+    for key, command in model_commands.items():
+        if command.group is None:
+            ungrouped.append((key, command))
+        else:
+            groups.setdefault(command.group, []).append((key, command))
+    if not groups:
+        return {None: ungrouped}
+    if ungrouped:
+        groups.setdefault(other, []).extend(ungrouped)
+    return groups
+
+
 class MainApp(tk.Tk):
     """Root window with server URL and command buttons."""
 
@@ -1298,15 +1320,37 @@ class MainApp(tk.Tk):
                                   width=5)
         timeout_entry.pack(side="left", padx=(6, 0))
 
-    def _build_command_buttons(self):
-        """Create a button for each available command."""
-        btn_frame = ttk.LabelFrame(self, text="Commands", padding=6)
-        btn_frame.pack(fill="both", expand=True,
-                       padx=10, pady=(4, 10))
+    #: The tab for commands without a group, when others have one.
+    OTHER_GROUP = "Other"
 
-        for cmd_key, info in self._model_commands.items():
+    def _build_command_buttons(self):
+        """Create a button for each available command.
+
+        Without any :attr:`Command.group` the buttons are one list.
+        With groups each group gets a tab, in the order the groups
+        first appear; commands without a group go on a last tab,
+        :attr:`OTHER_GROUP`.
+        """
+        groups = command_groups(self._model_commands, self.OTHER_GROUP)
+        if list(groups) == [None]:
+            btn_frame = ttk.LabelFrame(self, text="Commands", padding=6)
+            btn_frame.pack(fill="both", expand=True,
+                           padx=10, pady=(4, 10))
+            self._add_command_buttons(btn_frame, groups[None])
+            return
+        self._notebook = ttk.Notebook(self)
+        self._notebook.pack(fill="both", expand=True,
+                            padx=10, pady=(4, 10))
+        for group, commands in groups.items():
+            tab = ttk.Frame(self._notebook, padding=6)
+            self._notebook.add(tab, text=group)
+            self._add_command_buttons(tab, commands)
+
+    def _add_command_buttons(self, frame, commands):
+        """Add one button per (key, command) in *commands* to *frame*."""
+        for cmd_key, info in commands:
             LOGGER.debug('Preparing command for %s', cmd_key)
-            btn = ttk.Button(btn_frame, text=info.title,
+            btn = ttk.Button(frame, text=info.title,
                              command=lambda i=info: self._open_command(i))
             btn.pack(fill="x", pady=2)
             if info.parameters:
