@@ -909,9 +909,6 @@ class TestModelCommandWindow:
         window._on_load()
         assert collect_values(window._widget_tree)['traveler'] == 'Cy'
 
-    @pytest.mark.xfail(strict=True, reason=(
-        '_on_load overwrites the VALIDATION WARNING with '
-        '"Loaded from ..." so the warning is never seen'))
     def test_load_invalid_shows_warning(self, tk_root, monkeypatch,
                                         tmp_path):
         """Loading data that fails validation keeps the warning shown."""
@@ -920,6 +917,7 @@ class TestModelCommandWindow:
         patch_dialog(monkeypatch, 'askopenfilename', str(path))
         window = make_window(tk_root, model=Trip)
         window._on_load()
+        assert result_of(window).startswith(f'Loaded from {path}')
         assert 'VALIDATION WARNING' in result_of(window)
 
 

@@ -1108,17 +1108,19 @@ class ModelCommandWindow(tk.Toplevel):
             return
 
         # Validate so the user sees Pydantic errors early
+        warning = ""
         try:
             self.model_class.model_validate(data)
         except ValidationError as exc:
-            self._show_result(f"VALIDATION WARNING:\n{exc}")
-            # Continue anyway – fill what we can
+            # Continue anyway – fill what we can, and keep the
+            # warning on screen below the "Loaded" line.
+            warning = f"\n\nVALIDATION WARNING:\n{exc}"
 
         try:
             load_values(self._widget_tree, data)
-            self._show_result(f"Loaded from {path}")
+            self._show_result(f"Loaded from {path}{warning}")
         except (ValueError, TypeError, KeyError) as exc:
-            self._show_result(f"LOAD ERROR: {exc}")
+            self._show_result(f"LOAD ERROR: {exc}{warning}")
 
     # -- Submit -------------------------------------------------
 

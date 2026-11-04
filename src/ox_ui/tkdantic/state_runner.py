@@ -1049,22 +1049,22 @@ class StateRunnerWindow(tk.Toplevel):
             )
             return
 
+        warning = ''
         try:
             self._vars_model_class.model_validate(data)
         except ValidationError as exc:
-            self._vars_status_label.config(
-                text=f'Validation warning: {exc}',
-            )
-            # Continue anyway — fill what we can.
+            # Continue anyway — fill what we can, and keep the
+            # warning after the "Loaded" text.
+            warning = f'. Validation warning: {exc}'
 
         try:
             load_values(self._vars_widget_tree, data)
             self._vars_status_label.config(
-                text=f'Loaded from {path}',
+                text=f'Loaded from {path}{warning}',
             )
         except (ValueError, TypeError, KeyError) as exc:
             self._vars_status_label.config(
-                text=f'Load error: {exc}',
+                text=f'Load error: {exc}{warning}',
             )
 
     # --- enable / disable variable widgets ---------------------
