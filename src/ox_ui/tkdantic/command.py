@@ -22,6 +22,11 @@ class Command(BaseModel):
     # call with the parameters of self to the given `name` on a server.
     callback: Optional[Callable] = None
 
+    # Run the callback in a worker thread, so the GUI stays usable
+    # while a slow callback runs.  Only for callbacks that do not
+    # touch Tk themselves; the default runs it in the GUI's thread.
+    background: bool = False
+
     @model_validator(mode='after')
     def validate_cmd(self) -> Self:
         "Simple validator to use title to figure out name if necessary."

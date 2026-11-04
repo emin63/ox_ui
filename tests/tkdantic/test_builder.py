@@ -8,6 +8,8 @@ dialogs are replaced with :class:`ConstantFn` so nothing blocks.
 import json
 import logging
 import pathlib
+import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, ttk
 from typing import List, Literal, Optional
@@ -33,7 +35,9 @@ from ox_ui.tkdantic.builder import (
 from ox_ui.tkdantic.command import Command
 from ox_ui.tkdantic.introspection import introspect_model
 
-from .tk_helpers import ConstantFn, find_widgets, is_packed, text_content
+from .tk_helpers import (
+    ConstantFn, find_widgets, is_packed, pending_after_scripts,
+    text_content)
 
 
 # ---------------------------------------------------------------
@@ -744,7 +748,7 @@ class SubmitRecorder:
 
 
 class FakeRPCCall:
-    """Stand-in for SimpleRPCCall that finishes synchronously."""
+    """Stand-in for SimpleRPCCall that is done as soon as it starts."""
 
     instances = []
 
@@ -754,21 +758,54 @@ class FakeRPCCall:
         self.command_name = command_name
         self.cmd_args = cmd_args
         self.rpc_timeout = rpc_timeout
-        self.after = None
         self.result = 'rpc says hi'
+        self.started = False
         FakeRPCCall.instances.append(self)
 
     def start(self):
-        """Record the Submit state, then run the after callback."""
-        window = self.after.function.__self__
-        self.submit_state = str(window._submit_btn.cget('state'))
-        self.after.function(*self.after.args)
+        """Note the start; the call is then finished."""
+        self.started = True
+
+    def is_alive(self):
+        """Never running (finished at once)."""
+        return False
 
 
-def make_window(tk_root, callback=None, model=Small, url=''):
+def wait_for_call(window, seconds=5.0):
+    """Run Tk's event loop until *window*'s call is shown."""
+    deadline = time.monotonic() + seconds
+    while window._call_poll_id is not None:
+        assert time.monotonic() < deadline, 'the call did not end'
+        window.update()
+        time.sleep(0.01)
+
+
+class SlowCallback:
+    """A callback that waits for :attr:`go`, then returns or raises,
+    recording the thread it ran in."""
+
+    def __init__(self, result='slow done', error=None):
+        """Remember what to return (or raise)."""
+        self.result = result
+        self.error = error
+        self.go = threading.Event()
+        self.threads = []
+
+    def __call__(self, instance):
+        """Wait for go; return the result or raise the error."""
+        self.threads.append(threading.current_thread())
+        self.go.wait(5)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def make_window(tk_root, callback=None, model=Small, url='',
+                background=False):
     """Build a ModelCommandWindow for *model*."""
     command = Command(title='Do It', parameters=[model],
-                      description='Test command.', callback=callback)
+                      description='Test command.', callback=callback,
+                      background=background)
     url_var = tk.StringVar(tk_root, value=url)
     timeout_var = tk.IntVar(tk_root, value=7)
     return ModelCommandWindow(tk_root, command=command,
@@ -837,13 +874,74 @@ class TestModelCommandWindow:
         load_values(window._widget_tree, {'name': 'Zed'})
         window._submit_btn.invoke()
         call = FakeRPCCall.instances[0]
+        assert call.started
         assert call.url == 'http://127.0.0.1:1'
         assert call.command_name == 'do_it'
         assert json.loads(call.cmd_args) == {'name': 'Zed'}
         assert call.rpc_timeout == 7
-        assert call.submit_state == 'disabled'
+        # Disabled until the Tk thread sees the call has ended:
+        assert str(window._submit_btn.cget('state')) == 'disabled'
+        wait_for_call(window)
         assert result_of(window) == 'rpc says hi'
         assert str(window._submit_btn.cget('state')) == 'normal'
+
+    def test_callback_error_is_shown(self, tk_root):
+        """An exception in a callback is shown in the result pane."""
+        def explode(_instance):
+            raise RuntimeError('boom')
+        window = make_window(tk_root, explode)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert result_of(window) == 'ERROR: RuntimeError: boom'
+        assert str(window._submit_btn.cget('state')) == 'normal'
+
+    def test_callback_runs_in_the_tk_thread_by_default(self, tk_root):
+        """Without background=True the callback runs at once, in
+        the Tk thread, as before 0.6.0."""
+        recorder = SubmitRecorder('here')
+        window = make_window(tk_root, recorder)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert result_of(window) == 'here'
+        assert window._call_poll_id is None
+
+    def test_background_callback(self, tk_root):
+        """background=True: the callback runs in a worker thread,
+        Submit is disabled meanwhile, and the result is shown."""
+        slow = SlowCallback()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        window.update()
+        assert str(window._submit_btn.cget('state')) == 'disabled'
+        assert result_of(window) == ''
+        slow.go.set()
+        wait_for_call(window)
+        assert result_of(window) == 'slow done'
+        assert str(window._submit_btn.cget('state')) == 'normal'
+        assert slow.threads[0] is not threading.main_thread()
+
+    def test_background_callback_error(self, tk_root):
+        """An exception in a background callback is shown too."""
+        slow = SlowCallback(error=ValueError('bad input'))
+        slow.go.set()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        wait_for_call(window)
+        assert result_of(window) == 'ERROR: ValueError: bad input'
+
+    def test_closing_stops_checking(self, tk_root):
+        """Closing a window with a call running leaves no check of
+        it scheduled."""
+        slow = SlowCallback()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        window.destroy()
+        slow.go.set()
+        assert not [script for script in pending_after_scripts(tk_root)
+                    if '_check_call' in script]
 
     def test_dump_and_load(self, tk_root, monkeypatch, tmp_path):
         """Dump writes the validated model; Load fills a new form."""

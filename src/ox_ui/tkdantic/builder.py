@@ -4,6 +4,7 @@
 import json
 import logging as _rawLogging
 import os
+import threading
 import types
 from tkinter import filedialog
 
@@ -17,7 +18,6 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
 from ox_ui.core.simple_rpc_client import SimpleRPCCall
-from ox_ui.tkdantic.callbacks import TimedCallback
 from ox_ui.tkdantic.introspection import (
     introspect_field,
     introspect_model,
@@ -986,6 +986,42 @@ def setup_scrollable_canvas(parent):
     return canvas, inner
 
 
+#: How often (ms) a command window checks whether its call is done.
+_CALL_POLL_MS = 50
+
+
+def run_callback(callback, instance):
+    """``callback(instance)``, or an ``ERROR: ...`` text if it raises.
+
+    The text goes to the command window's result pane, so an error
+    is seen there instead of only on the console; the traceback is
+    logged.
+    """
+    try:
+        return callback(instance)
+    except Exception as exc:  # pylint: disable=broad-except
+        LOGGER.exception('Problem in running callback %s', callback)
+        return f"ERROR: {type(exc).__name__}: {exc}"
+
+
+class LocalCall(threading.Thread):
+    """Run a command's callback in a worker thread.
+
+    Like :class:`SimpleRPCCall`, it leaves its outcome in
+    :attr:`result` (an ``ERROR: ...`` text if the callback raised;
+    see :func:`run_callback`).
+    """
+
+    def __init__(self, callback, instance):
+        super().__init__(daemon=True)
+        self.callback = callback
+        self.instance = instance
+        self.result = None
+
+    def run(self):
+        self.result = run_callback(self.callback, self.instance)
+
+
 class ModelCommandWindow(tk.Toplevel):
     """A pop-up window whose input fields are introspected from
     a Pydantic BaseModel.
@@ -1007,6 +1043,7 @@ class ModelCommandWindow(tk.Toplevel):
         }
         self.title(command.title)
         self.minsize(720, 800)
+        self._call_poll_id = None   # the pending check of a call
 
         _canvas, inner = setup_scrollable_canvas(self)
         self._build_fields(inner, max_horizontal)
@@ -1139,8 +1176,12 @@ class ModelCommandWindow(tk.Toplevel):
             return
 
         if self.command.callback is not None:
-            result = self.command.callback(instance)
-            self._on_call_done(result)
+            if self.command.background:
+                self._start_call(LocalCall(self.command.callback,
+                                           instance))
+            else:
+                self._on_call_done(run_callback(self.command.callback,
+                                                instance))
             return
 
         url = self._server_config["url_var"].get().strip()
@@ -1148,22 +1189,49 @@ class ModelCommandWindow(tk.Toplevel):
             self._show_result("ERROR: Server URL is empty.")
             return
 
-        self._submit_btn.config(state="disabled")
-        self._status_label.config(text="Calling\u2026")
-
         timeout = self._server_config["timeout_var"].get()
         # Send the values as entered (as the command line does), not
         # a re-dump of the validated model: the server validates
         # them itself.
-        call_thread = SimpleRPCCall(
+        self._start_call(SimpleRPCCall(
             url=url, command_name=self.command.name,
-            cmd_args=json.dumps(raw_payload), rpc_timeout=timeout)
-        call_thread.after = TimedCallback(
-            interval=0, function=self._on_call_done, args=[call_thread])
+            cmd_args=json.dumps(raw_payload), rpc_timeout=timeout))
+
+    def _start_call(self, call_thread):
+        """Start *call_thread* and check on it from the Tk thread.
+
+        Submit is disabled until it ends.  Its result is shown by
+        :meth:`_check_call`, which runs in the Tk thread: Tk must not
+        be used from the worker thread.
+        """
+        self._submit_btn.config(state="disabled")
+        self._status_label.config(text="Calling\u2026")
         call_thread.start()
+        self._call_poll_id = self.after(
+            _CALL_POLL_MS, self._check_call, call_thread)
+
+    def _check_call(self, call_thread):
+        """Show *call_thread*'s result once it ends; else check later."""
+        if call_thread.is_alive():
+            self._call_poll_id = self.after(
+                _CALL_POLL_MS, self._check_call, call_thread)
+            return
+        self._call_poll_id = None
+        self._on_call_done(call_thread.result)
+
+    def destroy(self):
+        """Stop checking on a running call, then close the window.
+
+        The call itself is not stopped (an RPC command may still be
+        running on the server); its result is just not shown.
+        """
+        if self._call_poll_id is not None:
+            self.after_cancel(self._call_poll_id)
+            self._call_poll_id = None
+        super().destroy()
 
     def _on_call_done(self, cmd_result):
-        """Handle the XML-RPC call completion."""
+        """Show a command's result and enable Submit again."""
         if not isinstance(cmd_result, str):
             cmd_result = str(
                 getattr(cmd_result, 'result', cmd_result),
