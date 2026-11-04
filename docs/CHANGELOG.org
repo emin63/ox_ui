@@ -13,6 +13,70 @@ The version is =__version__= in =src/ox_ui/__init__.py=.  Releases
 are tagged =v<version>= with =ox_ui release= (see "Tagging releases"
 in =README.org=).
 
+* 0.6.0
+
+** Changes
+
+New in the Tk GUI (=ox_ui.tkdantic=):
+
+  - =Command.group= (default =None=): =MainApp= shows one tab per
+    group, in the order the groups first appear, and commands
+    without a group on a last "Other" tab.  Without any group the
+    window is unchanged.  =builder.command_groups()= does the split.
+  - =Command.background= (default =False=): a command with a
+    =callback= runs it in a worker thread, with Submit disabled and
+    "Calling..." shown, as for a server call.  For slow callbacks
+    that do not use Tk.  Without it the callback runs in the Tk
+    thread, as before.
+  - =builder.FieldValueError= (a =ValueError=), raised by
+    =collect_values= with the field's path in =field_path=.
+  - =core.simple_rpc_client.SingleTryTransport= (moved from
+    =cli_builder=, which still exports it) and =single_try_proxy()=.
+
+Fixes:
+
+  - The GUI could send a command twice: =SimpleRPCCall= used
+    xmlrpc's standard transport, which resends a request when the
+    connection drops, even after the server got it.  It now sends
+    once, like =--rpc-url=.
+  - The command window changed Tk widgets from a timer thread when a
+    server call ended.  The result is now shown from the Tk thread,
+    and closing the window stops waiting for it.
+  - An exception in a command's callback now shows as "ERROR:
+    <type>: <message>" in the form (traceback in the log) instead of
+    only on the console.
+  - Loading a JSON file that fails validation showed the warning and
+    replaced it at once with "Loaded from ..."; both are now shown,
+    in the command form and in the state runner's variables panel.
+  - =StateRunnerWindow= kept polling after its window was closed.
+  - A bad value in a nested model gave a message with the path
+    innermost-first and one "For ..." per level; it is now "For
+    top/middle/field: ..." once.
+  - =--help= marks [required] exactly the fields the model requires:
+    a required =Literal= field is now marked (and shows no default),
+    and a =str= field whose default is =''= is not.
+
+Behaviour changes to check when upgrading:
+
+  - The main window's timeout box starts at 0, which waits until
+    the command ends (it was 20 s, so a longer server command showed
+    a timeout error while it went on running).  A number above 0
+    still limits the wait.
+  - Submit sends the form's values as JSON, as the command line
+    does, instead of =model_dump_json()= of the validated model.
+    The server validates them itself; this only differs for models
+    whose validators or serializers change values.
+  - A server call's result appears up to 50 ms after the call ends
+    (it is checked from the Tk thread).  =SimpleRPCCall='s own
+    =after= option still works for other code that uses it.
+  - Field specs from =introspect_field= have a new key, =required=.
+  - =collect_values(widgets, path)= puts *path* in front of the field
+    names (it was put after them).
+
+** Status
+
+The test suite (=xvfb-run -a make test=) passes.
+
 * 0.5.0
 
 ** Changes

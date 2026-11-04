@@ -162,8 +162,10 @@ server:
 
 ``MainApp`` is a GUI client for such a server. It shows one button per
 command. Each button opens a form with a widget per field, and the
-form's Submit button validates the values and sends them to the server
-at the URL shown in the window:
+form's Submit button validates the values and sends them, once, to the
+server at the URL shown in the window. The window waits for the answer
+while staying usable. The timeout box (in seconds) limits the wait; 0,
+the default, waits until the command ends:
 
 .. code:: python
 
@@ -171,6 +173,31 @@ at the URL shown in the window:
    from ox_ui.tkdantic.inspector import commands_for_cls
 
    commands = {c.title: c for c in commands_for_cls(Planner)}
+   MainApp(title='Planner', model_commands=commands).mainloop()
+
+A ``Command`` can also run on the client instead of the server: give it
+a ``callback``, which Submit calls with the validated model. The
+callback runs in the GUI's thread, unless the command has
+``background=True``, which runs it in a worker thread (for slow
+callbacks that do not use Tk themselves). Its result, or the error it
+raised, is shown in the form.
+
+Commands with a ``group`` are shown on one tab per group, in the order
+the groups first appear; commands without one go on a last "Other" tab.
+Without any group the window is one list of buttons:
+
+.. code:: python
+
+   from ox_ui.tkdantic.command import Command
+
+   def show_trip(trip):
+       return f'{trip.seats} by {trip.transport} to {trip.city}'
+
+   commands = {c.title: c.model_copy(update={'group': 'server'})
+               for c in commands_for_cls(Planner)}
+   commands['show'] = Command(
+       title='show_trip', parameters=[Trip], callback=show_trip,
+       description='Show a trip here.', group='local')
    MainApp(title='Planner', model_commands=commands).mainloop()
 
 The package also has ``StateRunnerWindow``, a GUI for driving
