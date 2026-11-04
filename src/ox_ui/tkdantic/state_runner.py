@@ -407,6 +407,7 @@ class StateRunnerWindow(tk.Toplevel):
         self._register_state_variable_callback()
 
         self.protocol('WM_DELETE_WINDOW', self._on_close)
+        self._poll_after_id = None   # the pending poll (see _on_close)
         self._poll()
 
     # =============================================================
@@ -1442,14 +1443,20 @@ class StateRunnerWindow(tk.Toplevel):
                 interval = 50
         except (tk.TclError, ValueError):
             interval = _DEFAULT_UPDATE_MS
-        self.after(interval, self._poll)
+        self._poll_after_id = self.after(interval, self._poll)
 
     # =============================================================
     # Window lifecycle
     # =============================================================
 
     def _on_close(self) -> None:
-        """Handle window close: clean up resources."""
+        """Handle window close: clean up resources.
+
+        Cancels the pending poll, so a closed window stops polling.
+        """
+        if self._poll_after_id is not None:
+            self.after_cancel(self._poll_after_id)
+            self._poll_after_id = None
         self._deregister_state_variable_callback()
         self._close_log_file()
         self.destroy()

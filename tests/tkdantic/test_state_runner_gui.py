@@ -628,9 +628,6 @@ class TestPollAndClose:
         assert window._log_file_handle is None
         assert not window.winfo_exists()
 
-    @pytest.mark.xfail(strict=True, reason=(
-        '_on_close does not cancel the poll timer, so a closed '
-        'window keeps polling every interval forever'))
     def test_close_stops_polling(self, tk_root):
         """No poll callback is left pending after close."""
         window = make_window(tk_root, Gate())
