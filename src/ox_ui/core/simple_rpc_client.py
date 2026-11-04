@@ -106,7 +106,8 @@ class SimpleRPCCall(threading.Thread):
 
     def __init__(self, url, command_name, cmd_args, after=None,
                  rpc_timeout=30, daemon=True,
-                 log_func: Optional[Callable[[str], None]] = None, **kwargs):
+                 log_func: Optional[Callable[[str], None]] = None,
+                 single_try: bool = False, **kwargs):
         """Initializer.
 
         :param url:  URL of server.
@@ -127,6 +128,16 @@ class SimpleRPCCall(threading.Thread):
                                log message. If None, then we use an
                                internal info logging call.
 
+        :param single_try=False:  Send the request once, on a new
+                                  connection (see
+                                  :func:`single_try_proxy`).  Use it
+                                  for commands that must not run
+                                  twice, such as one starting a job.
+                                  By default the request goes through
+                                  :func:`get_proxy`, whose transport
+                                  sends it again if the connection
+                                  drops.
+
         :param **kwargs:  Passed to threading.Thread.__init__.
 
         """
@@ -138,23 +149,30 @@ class SimpleRPCCall(threading.Thread):
         self.after = after
         self.result = None
         self.log_func = log_func or LOGGER.info
+        self.single_try = single_try
+
+    def _call(self, proxy):
+        """Call the command through *proxy*; return its result."""
+        method = getattr(proxy, self.command_name)
+        if isinstance(self.cmd_args, list):
+            return method(*self.cmd_args)
+        if hasattr(self.cmd_args, 'model_dump_json'):
+            return method(self.cmd_args.model_dump_json())
+        return method(self.cmd_args)
 
     def run(self):
         """Do RPC call, put result into self.result, and do callback.
         """
         try:
             start = datetime.datetime.now()
-            # Sent once: a resend after a dropped connection could
-            # run the command twice on the server.
-            with single_try_proxy(self.url,
-                                  timeout=self.rpc_timeout) as proxy:
-                method = getattr(proxy, self.command_name)
-                if isinstance(self.cmd_args, list):
-                    self.result = method(*self.cmd_args)
-                elif hasattr(self.cmd_args, 'model_dump_json'):
-                    self.result = method(self.cmd_args.model_dump_json())
-                else:
-                    self.result = method(self.cmd_args)
+            if self.single_try:
+                with single_try_proxy(self.url,
+                                      timeout=self.rpc_timeout) as proxy:
+                    self.result = self._call(proxy)
+            else:
+                self.result = self._call(get_proxy(
+                    self.url, timeout=self.rpc_timeout, allow_none=True,
+                    use_builtin_types=True))
             finish = datetime.datetime.now()
             duration = finish-start
             msg = f'Did {self.command_name} in {duration.total_seconds()}'

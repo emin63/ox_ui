@@ -26,10 +26,11 @@ def echo_url():
     server.server_close()
 
 
-def run_call(url, cmd_args, rpc_timeout=10):
+def run_call(url, cmd_args, rpc_timeout=10, single_try=True):
     """Run a SimpleRPCCall of ``echo`` to the end; return it."""
     call = SimpleRPCCall(url=url, command_name='echo',
-                         cmd_args=cmd_args, rpc_timeout=rpc_timeout)
+                         cmd_args=cmd_args, rpc_timeout=rpc_timeout,
+                         single_try=single_try)
     call.start()
     call.join(10)
     return call
@@ -46,8 +47,8 @@ def test_no_timeout_waits(echo_url):
 
 
 def test_sent_once_when_the_connection_drops():
-    """A server that reads the request and hangs up gets it once
-    (xmlrpc's own Transport would send it again)."""
+    """With single_try, a server that reads the request and hangs up
+    gets it once."""
     server = DropOnce()
     try:
         call = run_call(server.url, 'x')
@@ -55,6 +56,23 @@ def test_sent_once_when_the_connection_drops():
         server.close()
     assert server.requests == 1
     assert 'Traceback' in call.result
+
+
+def test_default_still_resends():
+    """Without single_try the call goes through get_proxy, as before
+    0.6.0: xmlrpc's Transport sends it again after the hang-up."""
+    server = DropOnce()
+    try:
+        call = run_call(server.url, 'x', single_try=False)
+    finally:
+        server.close()
+    assert server.requests == 2
+    assert 'Traceback' in call.result
+
+
+def test_default_call_returns_the_result(echo_url):
+    """The default (get_proxy) path still works."""
+    assert run_call(echo_url, 'y', single_try=False).result == 'got y'
 
 
 def test_single_try_transport_still_in_cli_builder():

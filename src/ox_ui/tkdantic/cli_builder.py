@@ -140,14 +140,15 @@ def _is_required(spec):
     """Return ``True`` if *spec* represents a required field.
 
     Specs from :func:`introspect_field` say so in ``required`` (the
-    model requires the field).  For a spec without that key, a
-    field is required when it has no usable default and is not
-    nullable.  Booleans always have a default.
+    model requires the field; :func:`_flatten_to_options` clears it
+    inside a sub-model that need not be given).  For a spec without
+    that key, a field is required when it has no usable default and
+    is not nullable, and a boolean never is.
     """
-    if spec['gui_type'] == 'bool':
-        return False
     if 'required' in spec:
         return bool(spec['required'])
+    if spec['gui_type'] == 'bool':
+        return False
     if spec.get('nullable', False):
         return False
     default = spec.get('default', '')
@@ -270,6 +271,11 @@ def _flatten_to_options(specs, prefix=''):
                 f'{prefix}{_SEP}{name}' if prefix else name
             )
             sub_specs = introspect_model(spec['model'])
+            if not spec.get('required', True):
+                # The sub-model has a default (or is Optional), so
+                # none of its fields has to be given.
+                sub_specs = [dict(sub, required=False)
+                             for sub in sub_specs]
             yield from _flatten_to_options(
                 sub_specs, child_prefix,
             )

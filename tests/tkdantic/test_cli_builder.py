@@ -108,14 +108,26 @@ class Deep(BaseModel):
     middle: Middle
 
 
+class RequiredStage(BaseModel):
+    """A sub-model whose fields are required inside it."""
+
+    tif: Literal['DAY', 'IOC']
+    n: int
+
+
 class RequiredMix(BaseModel):
-    """A required choice, an Optional with no default, and a str
-    whose default is ''."""
+    """A required choice, an Optional with no default, a str whose
+    default is '', a required bool, and sub-models that are
+    required, defaulted and Optional."""
 
     tif: Literal['DAY', 'IOC']
     size: Optional[int]
     note: str = ''
     color: Literal['red', 'blue'] = 'red'
+    confirm: bool
+    stage: RequiredStage
+    dstage: RequiredStage = RequiredStage(tif='DAY', n=1)
+    ostage: Optional[RequiredStage] = None
 
 
 class MixedModel(BaseModel):
@@ -1037,19 +1049,28 @@ class TestOptionKinds:
         assert '[required]' in helps['size']
         assert '[required]' not in helps['note']
         assert '[required]' not in helps['color']
+        assert '[required]' in helps['confirm']
+        assert '[required]' in helps['stage__tif']
+        assert '[required]' in helps['stage__n']
+        for name in ('dstage__tif', 'dstage__n', 'ostage__tif',
+                     'ostage__n'):
+            assert '[required]' not in helps[name], name
         # A required choice has no default for click to show:
         tif = next(p for p in cmd.params if p.name == 'tif')
         assert tif.default is None
 
     def test_required_choice_must_be_given(self):
         """mycli --size 1 (no --tif): refused, not given 'DAY'."""
-        result, cap = _invoke(RequiredMix, ['--size', '1'])
+        given = ['--size', '1', '--confirm', '--stage.tif', 'DAY',
+                 '--stage.n', '2']
+        result, cap = _invoke(RequiredMix, given)
         assert result.exit_code != 0
         assert cap.instance is None
-        result, cap = _invoke(RequiredMix, ['--size', '1', '--tif',
-                                            'IOC'])
+        result, cap = _invoke(RequiredMix, given + ['--tif', 'IOC'])
         assert result.exit_code == 0, result.output
-        assert cap.instance == RequiredMix(tif='IOC', size=1)
+        assert cap.instance == RequiredMix(
+            tif='IOC', size=1, confirm=True,
+            stage=RequiredStage(tif='DAY', n=2))
 
     def test_hand_made_spec_keeps_the_old_rule(self):
         """A spec without 'required' is required when it has no

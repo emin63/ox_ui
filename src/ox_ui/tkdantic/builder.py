@@ -18,6 +18,8 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
 from ox_ui.core.simple_rpc_client import SimpleRPCCall
+# Not used here any more; kept for code importing it from builder.
+from ox_ui.tkdantic.callbacks import TimedCallback  # noqa: F401
 from ox_ui.tkdantic.introspection import (
     introspect_field,
     introspect_model,
@@ -633,6 +635,10 @@ class FieldValueError(ValueError):
         super().__init__(
             f"For {'/'.join(self.field_path)}: {problem}")
 
+    def __reduce__(self):
+        """Rebuild from (field_path, problem) when pickled or copied."""
+        return (type(self), (self.field_path, self.problem))
+
 
 def collect_values(widgets, path=()):
     """Recursively walk a widget tree and return a nested dict.
@@ -862,8 +868,20 @@ class _ModelListSection:
         self._update_count()
 
     def collect_all(self):
-        """Return a list of plain dicts, one per entry."""
-        return [collect_values(wt) for _, wt in self._entries]
+        """Return a list of plain dicts, one per entry.
+
+        A bad value raises :class:`FieldValueError` with the entry's
+        number as shown in its header (``#2``) in the path.
+        """
+        result = []
+        for number, (_, tree) in enumerate(self._entries, start=1):
+            try:
+                result.append(collect_values(tree))
+            except FieldValueError as problem:
+                raise FieldValueError(
+                    (f"#{number}",) + problem.field_path,
+                    problem.problem) from problem.__cause__
+        return result
 
     def load_all(self, items: list[dict]):
         """Clear entries and recreate from *items*."""
@@ -990,6 +1008,25 @@ def setup_scrollable_canvas(parent):
 _CALL_POLL_MS = 50
 
 
+def parse_timeout(text):
+    """The timeout in the window's box *text*, in seconds, or None.
+
+    0 (or an empty box) means no limit: wait until the command ends.
+    Fractions are kept.  Anything else, a negative number included,
+    raises ``ValueError``.
+    """
+    text = str(text).strip()
+    try:
+        seconds = float(text) if text else 0.0
+    except ValueError:
+        seconds = -1.0
+    if not seconds >= 0 or seconds == float('inf'):
+        raise ValueError(
+            f"the timeout {text!r} is not a number of seconds "
+            "(0 waits until the command ends).")
+    return seconds or None
+
+
 def run_callback(callback, instance):
     """``callback(instance)``, or an ``ERROR: ...`` text if it raises.
 
@@ -1034,6 +1071,8 @@ class ModelCommandWindow(tk.Toplevel):
 
     def __init__(self, master, *, command, url_var: tk.StringVar,
                  timeout_var: tk.IntVar, max_horizontal: int = 4):
+        # Set first: destroy() reads it, also after a failed __init__.
+        self._call_poll_id = None   # the pending check of a call
         super().__init__(master)
         self.command = command
         self.model_class = self.command.parameters[0]
@@ -1043,7 +1082,6 @@ class ModelCommandWindow(tk.Toplevel):
         }
         self.title(command.title)
         self.minsize(720, 800)
-        self._call_poll_id = None   # the pending check of a call
 
         _canvas, inner = setup_scrollable_canvas(self)
         self._build_fields(inner, max_horizontal)
@@ -1189,20 +1227,19 @@ class ModelCommandWindow(tk.Toplevel):
             self._show_result("ERROR: Server URL is empty.")
             return
 
+        timeout_var = self._server_config["timeout_var"]
         try:
-            timeout = self._server_config["timeout_var"].get()
-        except tk.TclError:
-            self._show_result(
-                "INPUT ERROR: the timeout must be a whole number of "
-                "seconds (0 waits until the command ends).")
+            timeout = parse_timeout(self.tk.globalgetvar(str(timeout_var)))
+        except ValueError as exc:
+            self._show_result(f"INPUT ERROR: {exc}")
             return
         # Send the values as entered (as the command line does), not
         # a re-dump of the validated model: the server validates
         # them itself.
         self._start_call(SimpleRPCCall(
             url=url, command_name=self.command.name,
-            cmd_args=json.dumps(raw_payload),
-            rpc_timeout=timeout if timeout > 0 else None))
+            cmd_args=json.dumps(raw_payload), single_try=True,
+            rpc_timeout=timeout))
 
     def _start_call(self, call_thread):
         """Start *call_thread* and check on it from the Tk thread.
@@ -1218,7 +1255,14 @@ class ModelCommandWindow(tk.Toplevel):
             _CALL_POLL_MS, self._check_call, call_thread)
 
     def _check_call(self, call_thread):
-        """Show *call_thread*'s result once it ends; else check later."""
+        """Show *call_thread*'s result once it ends; else check later.
+
+        Stops if the window is gone (destroyed without
+        :meth:`destroy`, e.g. from Tcl).
+        """
+        if not self.winfo_exists():
+            self._call_poll_id = None
+            return
         if call_thread.is_alive():
             self._call_poll_id = self.after(
                 _CALL_POLL_MS, self._check_call, call_thread)
@@ -1232,7 +1276,7 @@ class ModelCommandWindow(tk.Toplevel):
         The call itself is not stopped (an RPC command may still be
         running on the server); its result is just not shown.
         """
-        if self._call_poll_id is not None:
+        if getattr(self, '_call_poll_id', None) is not None:
             self.after_cancel(self._call_poll_id)
             self._call_poll_id = None
         super().destroy()
@@ -1261,19 +1305,22 @@ def command_groups(model_commands, other="Other"):
     Returns {group: [(key, command), ...]}, the groups in the order
     they first appear.  When no command has a group the only key is
     ``None``; otherwise commands without a group are under *other*,
-    last.
+    last (after any commands whose group is *other* itself).
     """
     groups = {}
     ungrouped = []
     for key, command in model_commands.items():
-        if command.group is None:
+        # getattr: command-like objects without a group still work.
+        group = getattr(command, 'group', None)
+        if group is None:
             ungrouped.append((key, command))
         else:
-            groups.setdefault(command.group, []).append((key, command))
+            groups.setdefault(group, []).append((key, command))
     if not groups:
         return {None: ungrouped}
-    if ungrouped:
-        groups.setdefault(other, []).extend(ungrouped)
+    if ungrouped or other in groups:
+        # Last, together with any commands whose group is *other*.
+        groups[other] = groups.pop(other, []) + ungrouped
     return groups
 
 
