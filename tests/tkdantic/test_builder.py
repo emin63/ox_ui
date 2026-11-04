@@ -351,9 +351,6 @@ class TestCollectLoad:
         with pytest.raises(AttributeError):
             collect_values(tree)
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'collect_values builds nested paths innermost-first and '
-        'wraps the message once per level'))
     def test_nested_error_path(self, tk_root):
         """A nested error names the path from the top model down."""
         frame = ttk.Frame(tk_root)
@@ -364,6 +361,15 @@ class TestCollectLoad:
         message = str(excinfo.value)
         assert message.startswith('For middle/inner/value: ')
         assert message.count('For ') == 1
+        assert excinfo.value.field_path == ('middle', 'inner', 'value')
+
+    def test_path_argument_goes_in_front(self, tk_root):
+        """A *path* given by the caller comes before the field names."""
+        tree = build_trip_tree(tk_root)
+        load_values(tree, {'seats': 'lots'})
+        with pytest.raises(builder.FieldValueError,
+                           match='^For outer/seats: '):
+            collect_values(tree, path=('outer',))
 
 
 # ---------------------------------------------------------------

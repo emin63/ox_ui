@@ -618,71 +618,91 @@ def build_fields_in_frame(
 # Value collection and loading
 # -------------------------------------------------------------------
 
+class FieldValueError(ValueError):
+    """A value in the form that cannot be read, with the field's path.
+
+    Raised by :func:`collect_values`.  *field_path* is the tuple of
+    field names from the top model down to the field, and the
+    message reads ``For a/b/c: <problem>``.  It is a ``ValueError``,
+    so code that catches ``ValueError`` still catches it.
+    """
+
+    def __init__(self, field_path, problem):
+        self.field_path = tuple(field_path)
+        self.problem = problem
+        super().__init__(
+            f"For {'/'.join(self.field_path)}: {problem}")
+
+
 def collect_values(widgets, path=()):
-    """Recursively walk a widget tree and return a nested dict."""
+    """Recursively walk a widget tree and return a nested dict.
+
+    A value that cannot be read raises :class:`FieldValueError`,
+    whose message names the field's path from the top model down
+    (``For middle/inner/value: ...``).  *path* is put in front of
+    that path (for a caller collecting a sub-tree).
+    """
     result = {}
     for name, entry in widgets.items():
         try:
-            # Nested model
-            if entry[0] == _MODEL_TAG:
-                result[name] = collect_values(
-                    entry[1], path=(name,) + path,
-                )
-                continue
-
-            # List of models
-            if entry[0] == _MODEL_LIST_TAG:
-                section = entry[1]
-                result[name] = section.collect_all()
-                continue
-
-            # List of scalars
-            if entry[0] == _SCALAR_LIST_TAG:
-                widget = entry[1]
-                result[name] = widget.collect()
-                continue
-
-            # Scalar field: entry is (spec, var)
-            spec, var = entry
-            raw = var.get()
-            gui_type = spec["gui_type"]
-
-            # Empty string on a nullable field -> None
-            if spec.get("nullable") and isinstance(raw, str) and (
-                    raw.strip() == ""):
-                result[name] = None
-                continue
-
-            if gui_type == "int":
-                if isinstance(raw, str) and raw.strip() == "":
-                    result[name] = None
-                else:
-                    result[name] = int(raw)
-            elif gui_type == "float":
-                if isinstance(raw, str) and raw.strip() == "":
-                    result[name] = None
-                else:
-                    result[name] = float(raw)
-            elif gui_type == "bool":
-                result[name] = bool(var.get())
-            else:
-                result[name] = str(raw)
+            result[name] = _collect_entry(entry)
+        except FieldValueError as problem:
+            # From a nested model: add this level's names in front.
+            raise FieldValueError(
+                tuple(path) + (name,) + problem.field_path,
+                problem.problem) from problem.__cause__
         except ValueError as problem:
             LOGGER.exception(
                 'Problem in collect_values for path=%s',
-                path,
+                tuple(path) + (name,),
             )
-            joined = "/".join((name,) + path)
-            msg = f"For {joined}: {problem}"
-            raise ValueError(msg) from problem
+            raise FieldValueError(
+                tuple(path) + (name,), problem) from problem
         except Exception:
             LOGGER.exception(
                 'Problem in collect_values for path=%s',
-                path,
+                tuple(path) + (name,),
             )
             raise
 
     return result
+
+
+def _collect_entry(entry):
+    """The value of one widget-tree *entry* (see :func:`collect_values`)."""
+    # Nested model
+    if entry[0] == _MODEL_TAG:
+        return collect_values(entry[1])
+
+    # List of models
+    if entry[0] == _MODEL_LIST_TAG:
+        return entry[1].collect_all()
+
+    # List of scalars
+    if entry[0] == _SCALAR_LIST_TAG:
+        return entry[1].collect()
+
+    # Scalar field: entry is (spec, var)
+    spec, var = entry
+    raw = var.get()
+    gui_type = spec["gui_type"]
+
+    # Empty string on a nullable field -> None
+    if spec.get("nullable") and isinstance(raw, str) and (
+            raw.strip() == ""):
+        return None
+
+    if gui_type == "int":
+        if isinstance(raw, str) and raw.strip() == "":
+            return None
+        return int(raw)
+    if gui_type == "float":
+        if isinstance(raw, str) and raw.strip() == "":
+            return None
+        return float(raw)
+    if gui_type == "bool":
+        return bool(var.get())
+    return str(raw)
 
 
 def load_values(widgets, data):
