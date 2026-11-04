@@ -1189,13 +1189,20 @@ class ModelCommandWindow(tk.Toplevel):
             self._show_result("ERROR: Server URL is empty.")
             return
 
-        timeout = self._server_config["timeout_var"].get()
+        try:
+            timeout = self._server_config["timeout_var"].get()
+        except tk.TclError:
+            self._show_result(
+                "INPUT ERROR: the timeout must be a whole number of "
+                "seconds (0 waits until the command ends).")
+            return
         # Send the values as entered (as the command line does), not
         # a re-dump of the validated model: the server validates
         # them itself.
         self._start_call(SimpleRPCCall(
             url=url, command_name=self.command.name,
-            cmd_args=json.dumps(raw_payload), rpc_timeout=timeout))
+            cmd_args=json.dumps(raw_payload),
+            rpc_timeout=timeout if timeout > 0 else None))
 
     def _start_call(self, call_thread):
         """Start *call_thread* and check on it from the Tk thread.
@@ -1280,9 +1287,13 @@ class MainApp(tk.Tk):
         url_entry = ttk.Entry(url_frame, textvariable=self._url_var, width=50)
         url_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
-        ttk.Label(url_frame, text="Timeout:").pack(side="left", padx=(6, 0))
+        ttk.Label(url_frame, text="Timeout (s, 0 = none):").pack(
+            side="left", padx=(6, 0))
 
-        self._timeout_var = tk.IntVar(value=20)
+        # 0: wait until the command ends.  A job on the server can run
+        # for much longer than any fixed limit, and a timeout only
+        # stops the wait (the command goes on on the server).
+        self._timeout_var = tk.IntVar(value=0)
         timeout_entry = ttk.Entry(url_frame, textvariable=self._timeout_var,
                                   width=5)
         timeout_entry.pack(side="left", padx=(6, 0))

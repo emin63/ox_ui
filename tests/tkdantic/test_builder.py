@@ -801,13 +801,13 @@ class SlowCallback:
 
 
 def make_window(tk_root, callback=None, model=Small, url='',
-                background=False):
+                background=False, timeout=7):
     """Build a ModelCommandWindow for *model*."""
     command = Command(title='Do It', parameters=[model],
                       description='Test command.', callback=callback,
                       background=background)
     url_var = tk.StringVar(tk_root, value=url)
-    timeout_var = tk.IntVar(tk_root, value=7)
+    timeout_var = tk.IntVar(tk_root, value=timeout)
     return ModelCommandWindow(tk_root, command=command,
                               url_var=url_var, timeout_var=timeout_var)
 
@@ -884,6 +884,29 @@ class TestModelCommandWindow:
         wait_for_call(window)
         assert result_of(window) == 'rpc says hi'
         assert str(window._submit_btn.cget('state')) == 'normal'
+
+    def test_zero_timeout_waits_until_the_end(self, tk_root,
+                                              monkeypatch):
+        """Timeout 0 sends rpc_timeout=None (wait for the answer)."""
+        monkeypatch.setattr(FakeRPCCall, 'instances', [])
+        monkeypatch.setattr(builder, 'SimpleRPCCall', FakeRPCCall)
+        window = make_window(tk_root, url='http://127.0.0.1:1',
+                             timeout=0)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert FakeRPCCall.instances[0].rpc_timeout is None
+        wait_for_call(window)
+
+    def test_bad_timeout_is_an_input_error(self, tk_root, monkeypatch):
+        """A timeout that is not a whole number sends nothing."""
+        monkeypatch.setattr(FakeRPCCall, 'instances', [])
+        monkeypatch.setattr(builder, 'SimpleRPCCall', FakeRPCCall)
+        window = make_window(tk_root, url='http://127.0.0.1:1')
+        window._server_config['timeout_var'].set('soon')
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert result_of(window).startswith('INPUT ERROR: the timeout')
+        assert FakeRPCCall.instances == []
 
     def test_callback_error_is_shown(self, tk_root):
         """An exception in a callback is shown in the result pane."""
@@ -1074,7 +1097,7 @@ class TestMainApp:
         """The app shows the URL, timeout and one button per command."""
         assert main_app.title() == 'Test App'
         assert main_app._url_var.get() == 'http://192.0.2.1:99'
-        assert main_app._timeout_var.get() == 20
+        assert main_app._timeout_var.get() == 0   # wait until done
         labels = [str(b.cget('text'))
                   for b in find_widgets(main_app, ttk.Button)]
         assert labels == ['Make Small', 'Plain', 'Double']
