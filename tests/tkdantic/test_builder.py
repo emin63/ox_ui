@@ -839,7 +839,7 @@ class TestModelCommandWindow:
         call = FakeRPCCall.instances[0]
         assert call.url == 'http://127.0.0.1:1'
         assert call.command_name == 'do_it'
-        assert call.cmd_args == Small(name='Zed')
+        assert json.loads(call.cmd_args) == {'name': 'Zed'}
         assert call.rpc_timeout == 7
         assert call.submit_state == 'disabled'
         assert result_of(window) == 'rpc says hi'

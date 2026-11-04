@@ -1152,9 +1152,12 @@ class ModelCommandWindow(tk.Toplevel):
         self._status_label.config(text="Calling\u2026")
 
         timeout = self._server_config["timeout_var"].get()
+        # Send the values as entered (as the command line does), not
+        # a re-dump of the validated model: the server validates
+        # them itself.
         call_thread = SimpleRPCCall(
-            url=url, command_name=self.command.name, cmd_args=instance,
-            rpc_timeout=timeout)
+            url=url, command_name=self.command.name,
+            cmd_args=json.dumps(raw_payload), rpc_timeout=timeout)
         call_thread.after = TimedCallback(
             interval=0, function=self._on_call_done, args=[call_thread])
         call_thread.start()

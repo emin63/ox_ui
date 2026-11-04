@@ -31,6 +31,35 @@ class TimeoutTransport(Transport):
         return conn
 
 
+class SingleTryTransport(TimeoutTransport):
+    """A :class:`TimeoutTransport` that sends each request once.
+
+    ``xmlrpc.client.Transport`` sends a request again when the
+    connection drops (meant for a stale kept-alive connection),
+    even after the server got the first copy.  For a command that
+    starts a job, a second copy starts a second job.
+    """
+
+    def request(self, host, handler, request_body, verbose=False):
+        """Send the request once; any failure is raised."""
+        return self.single_request(host, handler, request_body,
+                                   verbose)
+
+
+def single_try_proxy(url, timeout=None, use_builtin_types=True):
+    """A new ``ServerProxy`` for *url* that sends each request once.
+
+    *timeout* is in seconds; ``None`` waits until the server
+    answers.  Unlike :func:`get_proxy` the proxy is not cached:
+    each call gets its own connection, so the resend that
+    :class:`SingleTryTransport` drops could never have helped.
+    """
+    return xmlrpc.client.ServerProxy(
+        url, allow_none=True, use_builtin_types=use_builtin_types,
+        transport=SingleTryTransport(
+            timeout=timeout, use_builtin_types=use_builtin_types))
+
+
 def get_proxy(url, *args, timeout=30, use_builtin_types=True, **kwargs):
     """Return xmlrpc.client.ServerProxy using given timeout in transport.
 
@@ -115,16 +144,17 @@ class SimpleRPCCall(threading.Thread):
         """
         try:
             start = datetime.datetime.now()
-            proxy = get_proxy(
-                self.url, timeout=self.rpc_timeout, allow_none=True,
-                use_builtin_types=True)
-            method = getattr(proxy, self.command_name)
-            if isinstance(self.cmd_args, list):
-                self.result = method(*self.cmd_args)
-            elif hasattr(self.cmd_args, 'model_dump_json'):
-                self.result = method(self.cmd_args.model_dump_json())
-            else:
-                self.result = method(self.cmd_args)
+            # Sent once: a resend after a dropped connection could
+            # run the command twice on the server.
+            with single_try_proxy(self.url,
+                                  timeout=self.rpc_timeout) as proxy:
+                method = getattr(proxy, self.command_name)
+                if isinstance(self.cmd_args, list):
+                    self.result = method(*self.cmd_args)
+                elif hasattr(self.cmd_args, 'model_dump_json'):
+                    self.result = method(self.cmd_args.model_dump_json())
+                else:
+                    self.result = method(self.cmd_args)
             finish = datetime.datetime.now()
             duration = finish-start
             msg = f'Did {self.command_name} in {duration.total_seconds()}'

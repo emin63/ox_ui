@@ -53,7 +53,10 @@ import click
 from click.core import ParameterSource
 from pydantic import BaseModel, ValidationError
 
-from ox_ui.core.simple_rpc_client import TimeoutTransport
+# SingleTryTransport is imported here for code that used
+# cli_builder.SingleTryTransport (it lived here in 0.4.7).
+from ox_ui.core.simple_rpc_client import (  # noqa: F401
+    SingleTryTransport, TimeoutTransport)
 from ox_ui.tkdantic.introspection import (
     _unwrap_optional,
     introspect_model,
@@ -534,21 +537,6 @@ def full_rpc_url(url):
     'https://example.com/rpc'
     """
     return url if '://' in url else f'http://{url}'
-
-
-class SingleTryTransport(TimeoutTransport):
-    """A :class:`TimeoutTransport` that sends each request once.
-
-    ``xmlrpc.client.Transport`` sends a request again when the
-    connection drops (meant for a stale kept-alive connection),
-    even after the server got the first copy.  For a command that
-    starts a job, a second copy starts a second job.
-    """
-
-    def request(self, host, handler, request_body, verbose=False):
-        """Send the request once; any failure is raised."""
-        return self.single_request(host, handler, request_body,
-                                   verbose)
 
 
 def send_to_server(url, command_name, payload, timeout=None):
