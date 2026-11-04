@@ -108,6 +108,16 @@ class Deep(BaseModel):
     middle: Middle
 
 
+class RequiredMix(BaseModel):
+    """A required choice, an Optional with no default, and a str
+    whose default is ''."""
+
+    tif: Literal['DAY', 'IOC']
+    size: Optional[int]
+    note: str = ''
+    color: Literal['red', 'blue'] = 'red'
+
+
 class MixedModel(BaseModel):
     """Model with both nested model and model_list."""
 
@@ -1016,6 +1026,41 @@ class TestOptionKinds:
         assert '--setup.no-dry-run' in result.output
         assert '--params' in result.output
         assert '--rpc-url' in result.output
+
+    def test_required_marks_follow_the_model(self):
+        """[required] is on the fields the model requires: a choice
+        without a default too, and not a str whose default is ''."""
+        cmd = click_command_from_model(RequiredMix, callback=Capture(),
+                                       name='job')
+        helps = {param.name: param.help or '' for param in cmd.params}
+        assert '[required]' in helps['tif']
+        assert '[required]' in helps['size']
+        assert '[required]' not in helps['note']
+        assert '[required]' not in helps['color']
+        # A required choice has no default for click to show:
+        tif = next(p for p in cmd.params if p.name == 'tif')
+        assert tif.default is None
+
+    def test_required_choice_must_be_given(self):
+        """mycli --size 1 (no --tif): refused, not given 'DAY'."""
+        result, cap = _invoke(RequiredMix, ['--size', '1'])
+        assert result.exit_code != 0
+        assert cap.instance is None
+        result, cap = _invoke(RequiredMix, ['--size', '1', '--tif',
+                                            'IOC'])
+        assert result.exit_code == 0, result.output
+        assert cap.instance == RequiredMix(tif='IOC', size=1)
+
+    def test_hand_made_spec_keeps_the_old_rule(self):
+        """A spec without 'required' is required when it has no
+        default and is not nullable (as before 0.6.0)."""
+        assert cli_builder._is_required(
+            {'name': 'x', 'gui_type': 'str', 'default': ''})
+        assert not cli_builder._is_required(
+            {'name': 'x', 'gui_type': 'str', 'default': 'a'})
+        assert not cli_builder._is_required(
+            {'name': 'x', 'gui_type': 'str', 'default': '',
+             'nullable': True})
 
     def test_bad_json_item_names_its_option(self):
         """mycli --origin X --stops '{not json'"""

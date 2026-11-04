@@ -136,11 +136,15 @@ def _make_off_flag(flag):
 def _is_required(spec):
     """Return ``True`` if *spec* represents a required field.
 
-    A field is required when it has no usable default and is
-    not nullable.  Booleans always have a default.
+    Specs from :func:`introspect_field` say so in ``required`` (the
+    model requires the field).  For a spec without that key, a
+    field is required when it has no usable default and is not
+    nullable.  Booleans always have a default.
     """
     if spec['gui_type'] == 'bool':
         return False
+    if 'required' in spec:
+        return bool(spec['required'])
     if spec.get('nullable', False):
         return False
     default = spec.get('default', '')
@@ -195,7 +199,10 @@ def _scalar_option_kwargs(spec, prefix=''):
 
     elif gui_type == 'choice':
         kwargs['type'] = click.Choice(spec['choices'])
-        kwargs['default'] = spec.get('default')
+        # A required choice has no default: its spec's default (the
+        # first choice) is only there for the GUI's drop-down.
+        kwargs['default'] = (None if _is_required(spec)
+                             else spec.get('default'))
 
     elif gui_type == 'scalar_list':
         kwargs['type'] = _click_type_for(spec['inner_type'])
