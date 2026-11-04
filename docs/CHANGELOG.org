@@ -13,6 +13,94 @@ The version is =__version__= in =src/ox_ui/__init__.py=.  Releases
 are tagged =v<version>= with =ox_ui release= (see "Tagging releases"
 in =README.org=).
 
+* 0.6.0
+
+** Changes
+
+New in the Tk GUI (=ox_ui.tkdantic=):
+
+  - =Command.group= (default =None=): =MainApp= shows one tab per
+    group, in the order the groups first appear, and commands
+    without a group on a last "Other" tab.  Without any group the
+    window is unchanged.  =builder.command_groups()= does the split.
+  - =Command.background= (default =False=): a command with a
+    =callback= runs it in a worker thread, with Submit disabled and
+    "Calling..." shown, as for a server call.  For slow callbacks
+    that do not use Tk.  Without it the callback runs in the Tk
+    thread, as before.
+  - =SimpleRPCCall(single_try=True)= sends the request once, on a
+    new connection.  The default (=False=) is unchanged: through
+    =get_proxy=, whose transport resends after a dropped connection.
+  - =core.simple_rpc_client.SingleTryTransport= (moved from
+    =cli_builder=, which still exports it) and =single_try_proxy()=.
+  - =builder.FieldValueError= (a =ValueError=), raised by
+    =collect_values= with the field's path in =field_path=, and
+    =builder.parse_timeout()=.
+
+Fixes:
+
+  - The GUI could send a command twice: xmlrpc's standard transport
+    resends a request when the connection drops, even after the
+    server got it.  The command window now sends once
+    (=single_try=True=), like =--rpc-url=.
+  - The command window changed Tk widgets from a timer thread when a
+    server call ended.  The result is now shown from the Tk thread,
+    and a closed window stops waiting for it (the call itself goes
+    on).
+  - An exception in a command's callback now shows as "ERROR:
+    <type>: <message>" in the form (traceback in the log) instead of
+    only on the console.
+  - Loading a JSON file that fails validation showed the warning and
+    replaced it at once with "Loaded from ..."; both are now shown,
+    in the command form and in the state runner's variables panel.
+  - =StateRunnerWindow= kept polling after its window was closed.
+  - A bad value in a nested model gave a message with the path
+    innermost-first and one "For ..." per level.  It is now "For
+    top/middle/field: ..." once, and an entry of a list of models is
+    named by its number: "For stops/#2/miles: ...".
+  - =--help= marked [required] from the introspected default, so a
+    required =Literal= field was not marked (and showed its first
+    choice as a default) while a =str= field whose default is =''=
+    was.  It now marks the fields the model requires, except inside
+    a sub-model that has a default or is =Optional=.
+
+Behaviour changes to check when upgrading:
+
+  - The main window's timeout box starts at 0, which waits until
+    the command ends (it was 20 s, so a longer server command showed
+    a timeout error while it went on running).  A number above 0
+    still limits the wait, now with fractions kept (2.5 was cut to
+    2).  A negative or non-numeric value is refused with an INPUT
+    ERROR (-3 used to wait -3 s, that is fail at once).
+  - Submit sends the form's values as JSON, as the command line
+    does, instead of =model_dump_json()= of the validated model.
+    The server validates them itself.  Differences show only for
+    some models:
+    - a value changed by a validator is sent as typed, and the
+      server's validator changes it again;
+    - a field with =Field(exclude=True)= is sent, so the server uses
+      the typed value instead of its default;
+    - a =SecretStr= is sent as typed (it was sent as "**********"),
+      so it travels over XML-RPC in clear;
+    - =computed_field= values are not sent (they used to break
+      servers with =extra='forbid'=);
+    - inf and nan are sent as =Infinity= / =NaN= (they were null).
+  - A server call's result appears up to 50 ms after the call ends
+    (it is checked from the Tk thread).  =SimpleRPCCall='s own
+    =after= option still works for other code that uses it.
+  - =--help= marks [required] on more fields: a required =Literal=,
+    an =Optional[X]= without a default, and a required =bool=.  It
+    no longer marks a field whose default is =''=, or fields inside
+    a sub-model that has a default or is =Optional=.  Only the help
+    text changes: what the command accepts is the same.
+  - Field specs from =introspect_field= have a new key, =required=.
+  - =collect_values(widgets, path)= puts *path* in front of the field
+    names (it was put after them).
+
+** Status
+
+The test suite (=xvfb-run -a make test=) passes.
+
 * 0.5.0
 
 ** Changes

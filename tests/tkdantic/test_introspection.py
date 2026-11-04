@@ -184,6 +184,20 @@ class TestScalarSpecs:
         assert spec['gui_type'] == 'str'
 
 
+class TestRequired:
+    """Every spec says whether the model requires the field."""
+
+    def test_required_follows_the_model(self):
+        """Fields without a default are required; the rest not."""
+        required = {spec['name']: spec['required']
+                    for spec in introspect_model(Everything)}
+        assert required == {
+            'name': True, 'count': False, 'speed': False,
+            'active': False, 'transport': False, 'note': False,
+            'out_file': False, 'stop': True, 'stops': False,
+            'tags': False, 'sizes': False}
+
+
 class TestFilepathSpecs:
     """Specs for ``pathlib.Path`` fields."""
 

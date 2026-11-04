@@ -628,9 +628,6 @@ class TestPollAndClose:
         assert window._log_file_handle is None
         assert not window.winfo_exists()
 
-    @pytest.mark.xfail(strict=True, reason=(
-        '_on_close does not cancel the poll timer, so a closed '
-        'window keeps polling every interval forever'))
     def test_close_stops_polling(self, tk_root):
         """No poll callback is left pending after close."""
         window = make_window(tk_root, Gate())
@@ -818,9 +815,6 @@ class TestStateVariablesPanel:
         window._on_load_variables()
         assert form_values(window)['speed'] == 'fast'
 
-    @pytest.mark.xfail(strict=True, reason=(
-        '_on_load_variables overwrites the validation warning with '
-        '"Loaded from ..." so the warning is never seen'))
     def test_load_invalid_shows_warning(self, tk_root, monkeypatch,
                                         tmp_path):
         """Data failing validation leaves a visible warning."""
@@ -829,6 +823,7 @@ class TestStateVariablesPanel:
         patch_dialog(monkeypatch, 'askopenfilename', str(path))
         _machine, window = vars_window(tk_root)
         window._on_load_variables()
+        assert vars_label(window).startswith(f'Loaded from {path}')
         assert 'Validation warning' in vars_label(window)
 
     def test_close_removes_callback(self, tk_root):

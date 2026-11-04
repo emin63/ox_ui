@@ -5,14 +5,20 @@ from ``conftest.py`` and are skipped when Tk cannot start.  File
 dialogs are replaced with :class:`ConstantFn` so nothing blocks.
 """
 
+import copy
 import json
 import logging
 import pathlib
+import pickle
+import threading
+import time
 import tkinter as tk
+import types
+from xmlrpc.server import SimpleXMLRPCServer
 from tkinter import filedialog, ttk
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import pytest
 
 from ox_ui.tkdantic import builder
@@ -33,7 +39,9 @@ from ox_ui.tkdantic.builder import (
 from ox_ui.tkdantic.command import Command
 from ox_ui.tkdantic.introspection import introspect_model
 
-from .tk_helpers import ConstantFn, find_widgets, is_packed, text_content
+from .tk_helpers import (
+    ConstantFn, find_widgets, is_packed, pending_after_scripts,
+    text_content)
 
 
 # ---------------------------------------------------------------
@@ -120,6 +128,18 @@ class Small(BaseModel):
     """A model with a single required field."""
 
     name: str
+
+
+class Shouty(BaseModel):
+    """A model whose validator changes the value (to upper case)."""
+
+    name: str
+
+    @field_validator('name')
+    @classmethod
+    def _upper(cls, value):
+        """Upper-case the name."""
+        return value.upper()
 
 
 def scalar_model_specs(count):
@@ -351,9 +371,6 @@ class TestCollectLoad:
         with pytest.raises(AttributeError):
             collect_values(tree)
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'collect_values builds nested paths innermost-first and '
-        'wraps the message once per level'))
     def test_nested_error_path(self, tk_root):
         """A nested error names the path from the top model down."""
         frame = ttk.Frame(tk_root)
@@ -364,6 +381,34 @@ class TestCollectLoad:
         message = str(excinfo.value)
         assert message.startswith('For middle/inner/value: ')
         assert message.count('For ') == 1
+        assert excinfo.value.field_path == ('middle', 'inner', 'value')
+
+    def test_model_list_error_names_the_entry(self, tk_root):
+        """A bad value in a list entry names the entry (#2)."""
+        frame = ttk.Frame(tk_root)
+        tree = build_fields_in_frame(frame, introspect_model(Trip))
+        load_values(tree, {'stops': [{'miles': '1', 'month': 'May'},
+                                     {'miles': 'far', 'month': 'Jun'}]})
+        with pytest.raises(builder.FieldValueError) as excinfo:
+            collect_values(tree)
+        assert excinfo.value.field_path == ('stops', '#2', 'miles')
+        assert str(excinfo.value).startswith('For stops/#2/miles: ')
+
+    def test_field_value_error_pickles(self):
+        """FieldValueError survives pickle and copy."""
+        error = builder.FieldValueError(('a', 'b'), ValueError('bad'))
+        again = pickle.loads(pickle.dumps(error))
+        assert again.field_path == ('a', 'b')
+        assert str(again) == str(error)
+        assert str(copy.copy(error)) == str(error)
+
+    def test_path_argument_goes_in_front(self, tk_root):
+        """A *path* given by the caller comes before the field names."""
+        tree = build_trip_tree(tk_root)
+        load_values(tree, {'seats': 'lots'})
+        with pytest.raises(builder.FieldValueError,
+                           match='^For outer/seats: '):
+            collect_values(tree, path=('outer',))
 
 
 # ---------------------------------------------------------------
@@ -738,33 +783,74 @@ class SubmitRecorder:
 
 
 class FakeRPCCall:
-    """Stand-in for SimpleRPCCall that finishes synchronously."""
+    """Stand-in for SimpleRPCCall: done after :attr:`alive_checks`
+    calls of is_alive() (0: as soon as it starts)."""
+
+    alive_checks = 0
 
     instances = []
 
-    def __init__(self, url, command_name, cmd_args, rpc_timeout):
+    def __init__(self, url, command_name, cmd_args, rpc_timeout,
+                 single_try=False):
         """Record the call arguments."""
         self.url = url
         self.command_name = command_name
         self.cmd_args = cmd_args
         self.rpc_timeout = rpc_timeout
-        self.after = None
+        self.single_try = single_try
         self.result = 'rpc says hi'
+        self.started = False
         FakeRPCCall.instances.append(self)
 
     def start(self):
-        """Record the Submit state, then run the after callback."""
-        window = self.after.function.__self__
-        self.submit_state = str(window._submit_btn.cget('state'))
-        self.after.function(*self.after.args)
+        """Note the start."""
+        self.started = True
+
+    def is_alive(self):
+        """Running for the first alive_checks checks."""
+        if self.alive_checks > 0:
+            self.alive_checks -= 1
+            return True
+        return False
 
 
-def make_window(tk_root, callback=None, model=Small, url=''):
+def wait_for_call(window, seconds=5.0):
+    """Run Tk's event loop until *window*'s call is shown."""
+    deadline = time.monotonic() + seconds
+    while window._call_poll_id is not None:
+        assert time.monotonic() < deadline, 'the call did not end'
+        window.update()
+        time.sleep(0.01)
+
+
+class SlowCallback:
+    """A callback that waits for :attr:`go`, then returns or raises,
+    recording the thread it ran in."""
+
+    def __init__(self, result='slow done', error=None):
+        """Remember what to return (or raise)."""
+        self.result = result
+        self.error = error
+        self.go = threading.Event()
+        self.threads = []
+
+    def __call__(self, instance):
+        """Wait for go; return the result or raise the error."""
+        self.threads.append(threading.current_thread())
+        self.go.wait(5)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def make_window(tk_root, callback=None, model=Small, url='',
+                background=False, timeout=7):
     """Build a ModelCommandWindow for *model*."""
     command = Command(title='Do It', parameters=[model],
-                      description='Test command.', callback=callback)
+                      description='Test command.', callback=callback,
+                      background=background)
     url_var = tk.StringVar(tk_root, value=url)
-    timeout_var = tk.IntVar(tk_root, value=7)
+    timeout_var = tk.IntVar(tk_root, value=timeout)
     return ModelCommandWindow(tk_root, command=command,
                               url_var=url_var, timeout_var=timeout_var)
 
@@ -831,13 +917,201 @@ class TestModelCommandWindow:
         load_values(window._widget_tree, {'name': 'Zed'})
         window._submit_btn.invoke()
         call = FakeRPCCall.instances[0]
+        assert call.started
         assert call.url == 'http://127.0.0.1:1'
         assert call.command_name == 'do_it'
-        assert call.cmd_args == Small(name='Zed')
+        assert json.loads(call.cmd_args) == {'name': 'Zed'}
         assert call.rpc_timeout == 7
-        assert call.submit_state == 'disabled'
+        assert call.single_try
+        # Disabled until the Tk thread sees the call has ended:
+        assert str(window._submit_btn.cget('state')) == 'disabled'
+        wait_for_call(window)
         assert result_of(window) == 'rpc says hi'
         assert str(window._submit_btn.cget('state')) == 'normal'
+
+    def test_zero_timeout_waits_until_the_end(self, tk_root,
+                                              monkeypatch):
+        """Timeout 0 sends rpc_timeout=None (wait for the answer)."""
+        monkeypatch.setattr(FakeRPCCall, 'instances', [])
+        monkeypatch.setattr(builder, 'SimpleRPCCall', FakeRPCCall)
+        window = make_window(tk_root, url='http://127.0.0.1:1',
+                             timeout=0)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert FakeRPCCall.instances[0].rpc_timeout is None
+        wait_for_call(window)
+
+    def test_bad_timeout_is_an_input_error(self, tk_root, monkeypatch):
+        """A timeout that is not a whole number sends nothing."""
+        monkeypatch.setattr(FakeRPCCall, 'instances', [])
+        monkeypatch.setattr(builder, 'SimpleRPCCall', FakeRPCCall)
+        window = make_window(tk_root, url='http://127.0.0.1:1')
+        window._server_config['timeout_var'].set('soon')
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert result_of(window).startswith('INPUT ERROR: the timeout')
+        assert FakeRPCCall.instances == []
+
+    def test_fractional_timeout_is_kept(self, tk_root, monkeypatch):
+        """A timeout of 2.5 s is sent as 2.5 (not cut to 2)."""
+        monkeypatch.setattr(FakeRPCCall, 'instances', [])
+        monkeypatch.setattr(builder, 'SimpleRPCCall', FakeRPCCall)
+        window = make_window(tk_root, url='http://127.0.0.1:1')
+        window._server_config['timeout_var'].set('2.5')
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert FakeRPCCall.instances[0].rpc_timeout == 2.5
+        wait_for_call(window)
+
+    @pytest.mark.parametrize('text, expected', [
+        ('0', None), ('', None), (' 7 ', 7.0), ('0.5', 0.5),
+        ('20', 20.0)])
+    def test_parse_timeout(self, text, expected):
+        """0 or empty: no limit; other numbers are seconds."""
+        assert builder.parse_timeout(text) == expected
+
+    @pytest.mark.parametrize('text', ['-3', 'soon', 'nan', 'inf'])
+    def test_parse_timeout_refuses(self, text):
+        """Negative or non-numbers are refused, never 'no limit'."""
+        with pytest.raises(ValueError, match='not a number of seconds'):
+            builder.parse_timeout(text)
+
+    def test_result_waits_for_the_call(self, tk_root, monkeypatch):
+        """While the call runs, Submit stays disabled and nothing is
+        shown; the result comes once it ends."""
+        monkeypatch.setattr(FakeRPCCall, 'instances', [])
+        monkeypatch.setattr(FakeRPCCall, 'alive_checks', 3)
+        monkeypatch.setattr(builder, 'SimpleRPCCall', FakeRPCCall)
+        window = make_window(tk_root, url='http://127.0.0.1:1')
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        deadline = time.monotonic() + 0.12   # past two checks
+        while time.monotonic() < deadline:
+            window.update()
+            time.sleep(0.01)
+        assert str(window._submit_btn.cget('state')) == 'disabled'
+        assert result_of(window) == ''
+        wait_for_call(window)
+        assert result_of(window) == 'rpc says hi'
+
+    def test_real_server_call(self, tk_root):
+        """Submit to a real XML-RPC server: the values as entered go
+        once, and the answer is shown from the Tk thread."""
+        server = SimpleXMLRPCServer(('127.0.0.1', 0), logRequests=False,
+                                    allow_none=True)
+        received = []
+
+        def do_it(payload):
+            received.append(payload)
+            return f'server got {json.loads(payload)["name"]}'
+        server.register_function(do_it, 'do_it')
+        thread = threading.Thread(target=server.serve_forever,
+                                  daemon=True)
+        thread.start()
+        shown_in = []
+        try:
+            host, port = server.server_address
+            window = make_window(tk_root, model=Shouty,
+                                 url=f'http://{host}:{port}')
+            original = window._on_call_done
+
+            def record(result):
+                shown_in.append(threading.current_thread())
+                original(result)
+            window._on_call_done = record
+            load_values(window._widget_tree, {'name': 'zed'})
+            window._submit_btn.invoke()
+            wait_for_call(window)
+        finally:
+            server.shutdown()
+            server.server_close()
+        # Sent as typed, not as the validated model ('ZED'):
+        assert [json.loads(p) for p in received] == [{'name': 'zed'}]
+        assert result_of(window) == 'server got zed'
+        assert shown_in == [threading.main_thread()]
+
+    def test_destroy_after_a_failed_init(self, tk_root):
+        """A window whose __init__ failed can still be destroyed."""
+        command = Command(title='Bad', description='No model.')
+        with pytest.raises(IndexError):
+            ModelCommandWindow(tk_root, command=command,
+                               url_var=tk.StringVar(tk_root),
+                               timeout_var=tk.IntVar(tk_root))
+        for child in list(tk_root.children.values()):
+            child.destroy()     # must not raise
+
+    def test_tcl_destroy_stops_checking(self, tk_root):
+        """A window destroyed from Tcl stops checking on its call."""
+        slow = SlowCallback()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        tk_root.tk.call('destroy', window._w)
+        slow.go.set()
+        deadline = time.monotonic() + 0.3
+        while time.monotonic() < deadline:
+            tk_root.update()
+            time.sleep(0.01)
+        assert not [script for script in pending_after_scripts(tk_root)
+                    if '_check_call' in script]
+
+    def test_callback_error_is_shown(self, tk_root):
+        """An exception in a callback is shown in the result pane."""
+        def explode(_instance):
+            raise RuntimeError('boom')
+        window = make_window(tk_root, explode)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert result_of(window) == 'ERROR: RuntimeError: boom'
+        assert str(window._submit_btn.cget('state')) == 'normal'
+
+    def test_callback_runs_in_the_tk_thread_by_default(self, tk_root):
+        """Without background=True the callback runs at once, in
+        the Tk thread, as before 0.6.0."""
+        recorder = SubmitRecorder('here')
+        window = make_window(tk_root, recorder)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        assert result_of(window) == 'here'
+        assert window._call_poll_id is None
+
+    def test_background_callback(self, tk_root):
+        """background=True: the callback runs in a worker thread,
+        Submit is disabled meanwhile, and the result is shown."""
+        slow = SlowCallback()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        window.update()
+        assert str(window._submit_btn.cget('state')) == 'disabled'
+        assert result_of(window) == ''
+        slow.go.set()
+        wait_for_call(window)
+        assert result_of(window) == 'slow done'
+        assert str(window._submit_btn.cget('state')) == 'normal'
+        assert slow.threads[0] is not threading.main_thread()
+
+    def test_background_callback_error(self, tk_root):
+        """An exception in a background callback is shown too."""
+        slow = SlowCallback(error=ValueError('bad input'))
+        slow.go.set()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        wait_for_call(window)
+        assert result_of(window) == 'ERROR: ValueError: bad input'
+
+    def test_closing_stops_checking(self, tk_root):
+        """Closing a window with a call running leaves no check of
+        it scheduled."""
+        slow = SlowCallback()
+        window = make_window(tk_root, slow, background=True)
+        load_values(window._widget_tree, {'name': 'Zed'})
+        window._submit_btn.invoke()
+        window.destroy()
+        slow.go.set()
+        assert not [script for script in pending_after_scripts(tk_root)
+                    if '_check_call' in script]
 
     def test_dump_and_load(self, tk_root, monkeypatch, tmp_path):
         """Dump writes the validated model; Load fills a new form."""
@@ -903,9 +1177,6 @@ class TestModelCommandWindow:
         window._on_load()
         assert collect_values(window._widget_tree)['traveler'] == 'Cy'
 
-    @pytest.mark.xfail(strict=True, reason=(
-        '_on_load overwrites the VALIDATION WARNING with '
-        '"Loaded from ..." so the warning is never seen'))
     def test_load_invalid_shows_warning(self, tk_root, monkeypatch,
                                         tmp_path):
         """Loading data that fails validation keeps the warning shown."""
@@ -914,6 +1185,7 @@ class TestModelCommandWindow:
         patch_dialog(monkeypatch, 'askopenfilename', str(path))
         window = make_window(tk_root, model=Trip)
         window._on_load()
+        assert result_of(window).startswith(f'Loaded from {path}')
         assert 'VALIDATION WARNING' in result_of(window)
 
 
@@ -972,7 +1244,7 @@ class TestMainApp:
         """The app shows the URL, timeout and one button per command."""
         assert main_app.title() == 'Test App'
         assert main_app._url_var.get() == 'http://192.0.2.1:99'
-        assert main_app._timeout_var.get() == 20
+        assert main_app._timeout_var.get() == 0   # wait until done
         labels = [str(b.cget('text'))
                   for b in find_widgets(main_app, ttk.Button)]
         assert labels == ['Make Small', 'Plain', 'Double']
@@ -995,3 +1267,75 @@ class TestMainApp:
         """A command with two parameter models is refused."""
         with pytest.raises(ValueError, match='parameters !=1'):
             main_app._open_command(MAIN_COMMANDS['double'])
+
+
+GROUPED_COMMANDS = {
+    'small': Command(title='Make Small', parameters=[Small],
+                     description='Takes a Small model.', group='jobs'),
+    'stop': Command(title='Stop It', parameters=[Stop],
+                    description='Takes a Stop.', group='tools'),
+    'loose': Command(title='Loose', parameters=[Small],
+                     description='No group.'),
+    'more': Command(title='More Jobs', parameters=[Small],
+                    description='Second job.', group='jobs'),
+}
+
+
+class TestCommandGroups:
+    """Tests for :func:`command_groups` and MainApp's tabs."""
+
+    def test_no_groups_is_one_list(self):
+        """Without groups the only key is None, in the given order."""
+        groups = builder.command_groups(MAIN_COMMANDS)
+        assert list(groups) == [None]
+        assert [key for key, _ in groups[None]] == [
+            'small', 'plain', 'double']
+
+    def test_groups_in_first_seen_order_other_last(self):
+        """Groups keep their first-seen order; ungrouped is last."""
+        groups = builder.command_groups(GROUPED_COMMANDS)
+        assert list(groups) == ['jobs', 'tools', 'Other']
+        assert [key for key, _ in groups['jobs']] == ['small', 'more']
+        assert [key for key, _ in groups['Other']] == ['loose']
+
+    def test_explicit_other_group_goes_last(self):
+        """A group named like the "Other" tab is merged into it, last."""
+        commands = {
+            'a': Command(title='A', description='a', group='Other'),
+            'b': Command(title='B', description='b', group='jobs'),
+            'c': Command(title='C', description='c'),
+        }
+        groups = builder.command_groups(commands)
+        assert list(groups) == ['jobs', 'Other']
+        assert [key for key, _ in groups['Other']] == ['a', 'c']
+
+    def test_command_like_objects_without_group(self):
+        """Objects without a group attribute count as ungrouped."""
+        plain = types.SimpleNamespace(title='P', parameters=[])
+        assert builder.command_groups({'p': plain}) == {
+            None: [('p', plain)]}
+
+    def test_tabs(self):
+        """MainApp shows one tab per group with its buttons."""
+        try:
+            app = MainApp('Grouped', GROUPED_COMMANDS)
+        except tk.TclError as exc:
+            pytest.skip(f'No display available for Tk: {exc}')
+        try:
+            app.withdraw()
+            notebook = app._notebook
+            tabs = [notebook.tab(tab, 'text') for tab in notebook.tabs()]
+            assert tabs == ['jobs', 'tools', 'Other']
+            jobs = app.nametowidget(notebook.tabs()[0])
+            assert [str(b.cget('text')) for b in
+                    find_widgets(jobs, ttk.Button)] == [
+                        'Make Small', 'More Jobs']
+            find_widgets(app, ttk.Button, 'Stop It')[0].invoke()
+            windows = find_widgets(app, ModelCommandWindow)
+            assert [w.model_class for w in windows] == [Stop]
+        finally:
+            app.destroy()
+
+    def test_no_groups_no_tabs(self, main_app):
+        """Without groups there is no notebook (as before 0.6.0)."""
+        assert not find_widgets(main_app, ttk.Notebook)

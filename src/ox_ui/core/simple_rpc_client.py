@@ -31,6 +31,35 @@ class TimeoutTransport(Transport):
         return conn
 
 
+class SingleTryTransport(TimeoutTransport):
+    """A :class:`TimeoutTransport` that sends each request once.
+
+    ``xmlrpc.client.Transport`` sends a request again when the
+    connection drops (meant for a stale kept-alive connection),
+    even after the server got the first copy.  For a command that
+    starts a job, a second copy starts a second job.
+    """
+
+    def request(self, host, handler, request_body, verbose=False):
+        """Send the request once; any failure is raised."""
+        return self.single_request(host, handler, request_body,
+                                   verbose)
+
+
+def single_try_proxy(url, timeout=None, use_builtin_types=True):
+    """A new ``ServerProxy`` for *url* that sends each request once.
+
+    *timeout* is in seconds; ``None`` waits until the server
+    answers.  Unlike :func:`get_proxy` the proxy is not cached:
+    each call gets its own connection, so the resend that
+    :class:`SingleTryTransport` drops could never have helped.
+    """
+    return xmlrpc.client.ServerProxy(
+        url, allow_none=True, use_builtin_types=use_builtin_types,
+        transport=SingleTryTransport(
+            timeout=timeout, use_builtin_types=use_builtin_types))
+
+
 def get_proxy(url, *args, timeout=30, use_builtin_types=True, **kwargs):
     """Return xmlrpc.client.ServerProxy using given timeout in transport.
 
@@ -77,7 +106,8 @@ class SimpleRPCCall(threading.Thread):
 
     def __init__(self, url, command_name, cmd_args, after=None,
                  rpc_timeout=30, daemon=True,
-                 log_func: Optional[Callable[[str], None]] = None, **kwargs):
+                 log_func: Optional[Callable[[str], None]] = None,
+                 single_try: bool = False, **kwargs):
         """Initializer.
 
         :param url:  URL of server.
@@ -98,6 +128,16 @@ class SimpleRPCCall(threading.Thread):
                                log message. If None, then we use an
                                internal info logging call.
 
+        :param single_try=False:  Send the request once, on a new
+                                  connection (see
+                                  :func:`single_try_proxy`).  Use it
+                                  for commands that must not run
+                                  twice, such as one starting a job.
+                                  By default the request goes through
+                                  :func:`get_proxy`, whose transport
+                                  sends it again if the connection
+                                  drops.
+
         :param **kwargs:  Passed to threading.Thread.__init__.
 
         """
@@ -109,22 +149,30 @@ class SimpleRPCCall(threading.Thread):
         self.after = after
         self.result = None
         self.log_func = log_func or LOGGER.info
+        self.single_try = single_try
+
+    def _call(self, proxy):
+        """Call the command through *proxy*; return its result."""
+        method = getattr(proxy, self.command_name)
+        if isinstance(self.cmd_args, list):
+            return method(*self.cmd_args)
+        if hasattr(self.cmd_args, 'model_dump_json'):
+            return method(self.cmd_args.model_dump_json())
+        return method(self.cmd_args)
 
     def run(self):
         """Do RPC call, put result into self.result, and do callback.
         """
         try:
             start = datetime.datetime.now()
-            proxy = get_proxy(
-                self.url, timeout=self.rpc_timeout, allow_none=True,
-                use_builtin_types=True)
-            method = getattr(proxy, self.command_name)
-            if isinstance(self.cmd_args, list):
-                self.result = method(*self.cmd_args)
-            elif hasattr(self.cmd_args, 'model_dump_json'):
-                self.result = method(self.cmd_args.model_dump_json())
+            if self.single_try:
+                with single_try_proxy(self.url,
+                                      timeout=self.rpc_timeout) as proxy:
+                    self.result = self._call(proxy)
             else:
-                self.result = method(self.cmd_args)
+                self.result = self._call(get_proxy(
+                    self.url, timeout=self.rpc_timeout, allow_none=True,
+                    use_builtin_types=True))
             finish = datetime.datetime.now()
             duration = finish-start
             msg = f'Did {self.command_name} in {duration.total_seconds()}'

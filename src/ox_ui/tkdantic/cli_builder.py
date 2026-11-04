@@ -53,7 +53,10 @@ import click
 from click.core import ParameterSource
 from pydantic import BaseModel, ValidationError
 
-from ox_ui.core.simple_rpc_client import TimeoutTransport
+# SingleTryTransport is imported here for code that used
+# cli_builder.SingleTryTransport (it lived here in 0.4.7).
+from ox_ui.core.simple_rpc_client import (  # noqa: F401
+    SingleTryTransport, TimeoutTransport)
 from ox_ui.tkdantic.introspection import (
     _unwrap_optional,
     introspect_model,
@@ -136,9 +139,14 @@ def _make_off_flag(flag):
 def _is_required(spec):
     """Return ``True`` if *spec* represents a required field.
 
-    A field is required when it has no usable default and is
-    not nullable.  Booleans always have a default.
+    Specs from :func:`introspect_field` say so in ``required`` (the
+    model requires the field; :func:`_flatten_to_options` clears it
+    inside a sub-model that need not be given).  For a spec without
+    that key, a field is required when it has no usable default and
+    is not nullable, and a boolean never is.
     """
+    if 'required' in spec:
+        return bool(spec['required'])
     if spec['gui_type'] == 'bool':
         return False
     if spec.get('nullable', False):
@@ -195,7 +203,10 @@ def _scalar_option_kwargs(spec, prefix=''):
 
     elif gui_type == 'choice':
         kwargs['type'] = click.Choice(spec['choices'])
-        kwargs['default'] = spec.get('default')
+        # A required choice has no default: its spec's default (the
+        # first choice) is only there for the GUI's drop-down.
+        kwargs['default'] = (None if _is_required(spec)
+                             else spec.get('default'))
 
     elif gui_type == 'scalar_list':
         kwargs['type'] = _click_type_for(spec['inner_type'])
@@ -260,6 +271,11 @@ def _flatten_to_options(specs, prefix=''):
                 f'{prefix}{_SEP}{name}' if prefix else name
             )
             sub_specs = introspect_model(spec['model'])
+            if not spec.get('required', True):
+                # The sub-model has a default (or is Optional), so
+                # none of its fields has to be given.
+                sub_specs = [dict(sub, required=False)
+                             for sub in sub_specs]
             yield from _flatten_to_options(
                 sub_specs, child_prefix,
             )
@@ -527,21 +543,6 @@ def full_rpc_url(url):
     'https://example.com/rpc'
     """
     return url if '://' in url else f'http://{url}'
-
-
-class SingleTryTransport(TimeoutTransport):
-    """A :class:`TimeoutTransport` that sends each request once.
-
-    ``xmlrpc.client.Transport`` sends a request again when the
-    connection drops (meant for a stale kept-alive connection),
-    even after the server got the first copy.  For a command that
-    starts a job, a second copy starts a second job.
-    """
-
-    def request(self, host, handler, request_body, verbose=False):
-        """Send the request once; any failure is raised."""
-        return self.single_request(host, handler, request_body,
-                                   verbose)
 
 
 def send_to_server(url, command_name, payload, timeout=None):

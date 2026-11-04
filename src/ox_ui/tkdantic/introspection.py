@@ -30,6 +30,11 @@ Additional keys appear for specific types:
 *   ``defaultextension`` — e.g. ``".csv"`` (for ``"filepath"``).
 *   ``inner_type`` — ``"str"``, ``"int"``, or ``"float"``
     (for ``"scalar_list"``).
+
+Specs made by :func:`introspect_field` also have ``required``:
+``True`` when the model requires the field (it has no default).
+The ``default`` of a required choice is still its first choice, so
+the GUI's drop-down starts with a value.
 """
 
 import pathlib
@@ -185,8 +190,16 @@ def introspect_field(name, annotation, field_info):
     docstring.  Handles ``Optional``, ``Literal``, ``bool``,
     ``int``, ``float``, ``str``, ``pathlib.Path``,
     nested ``BaseModel``, ``List[BaseModel]``, and
-    ``List[scalar]``.
+    ``List[scalar]``.  Every spec has ``required``: whether the
+    model requires the field (it has no default).
     """
+    spec = _field_spec(name, annotation, field_info)
+    spec["required"] = field_info.is_required()
+    return spec
+
+
+def _field_spec(name, annotation, field_info):
+    """The spec of :func:`introspect_field`, without ``required``."""
     default = resolve_default(field_info)
     help_text = field_info.description or ""
 

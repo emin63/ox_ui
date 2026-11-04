@@ -4,6 +4,7 @@
 import json
 import logging as _rawLogging
 import os
+import threading
 import types
 from tkinter import filedialog
 
@@ -17,7 +18,8 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
 from ox_ui.core.simple_rpc_client import SimpleRPCCall
-from ox_ui.tkdantic.callbacks import TimedCallback
+# Not used here any more; kept for code importing it from builder.
+from ox_ui.tkdantic.callbacks import TimedCallback  # noqa: F401
 from ox_ui.tkdantic.introspection import (
     introspect_field,
     introspect_model,
@@ -618,71 +620,95 @@ def build_fields_in_frame(
 # Value collection and loading
 # -------------------------------------------------------------------
 
+class FieldValueError(ValueError):
+    """A value in the form that cannot be read, with the field's path.
+
+    Raised by :func:`collect_values`.  *field_path* is the tuple of
+    field names from the top model down to the field, and the
+    message reads ``For a/b/c: <problem>``.  It is a ``ValueError``,
+    so code that catches ``ValueError`` still catches it.
+    """
+
+    def __init__(self, field_path, problem):
+        self.field_path = tuple(field_path)
+        self.problem = problem
+        super().__init__(
+            f"For {'/'.join(self.field_path)}: {problem}")
+
+    def __reduce__(self):
+        """Rebuild from (field_path, problem) when pickled or copied."""
+        return (type(self), (self.field_path, self.problem))
+
+
 def collect_values(widgets, path=()):
-    """Recursively walk a widget tree and return a nested dict."""
+    """Recursively walk a widget tree and return a nested dict.
+
+    A value that cannot be read raises :class:`FieldValueError`,
+    whose message names the field's path from the top model down
+    (``For middle/inner/value: ...``).  *path* is put in front of
+    that path (for a caller collecting a sub-tree).
+    """
     result = {}
     for name, entry in widgets.items():
         try:
-            # Nested model
-            if entry[0] == _MODEL_TAG:
-                result[name] = collect_values(
-                    entry[1], path=(name,) + path,
-                )
-                continue
-
-            # List of models
-            if entry[0] == _MODEL_LIST_TAG:
-                section = entry[1]
-                result[name] = section.collect_all()
-                continue
-
-            # List of scalars
-            if entry[0] == _SCALAR_LIST_TAG:
-                widget = entry[1]
-                result[name] = widget.collect()
-                continue
-
-            # Scalar field: entry is (spec, var)
-            spec, var = entry
-            raw = var.get()
-            gui_type = spec["gui_type"]
-
-            # Empty string on a nullable field -> None
-            if spec.get("nullable") and isinstance(raw, str) and (
-                    raw.strip() == ""):
-                result[name] = None
-                continue
-
-            if gui_type == "int":
-                if isinstance(raw, str) and raw.strip() == "":
-                    result[name] = None
-                else:
-                    result[name] = int(raw)
-            elif gui_type == "float":
-                if isinstance(raw, str) and raw.strip() == "":
-                    result[name] = None
-                else:
-                    result[name] = float(raw)
-            elif gui_type == "bool":
-                result[name] = bool(var.get())
-            else:
-                result[name] = str(raw)
+            result[name] = _collect_entry(entry)
+        except FieldValueError as problem:
+            # From a nested model: add this level's names in front.
+            raise FieldValueError(
+                tuple(path) + (name,) + problem.field_path,
+                problem.problem) from problem.__cause__
         except ValueError as problem:
             LOGGER.exception(
                 'Problem in collect_values for path=%s',
-                path,
+                tuple(path) + (name,),
             )
-            joined = "/".join((name,) + path)
-            msg = f"For {joined}: {problem}"
-            raise ValueError(msg) from problem
+            raise FieldValueError(
+                tuple(path) + (name,), problem) from problem
         except Exception:
             LOGGER.exception(
                 'Problem in collect_values for path=%s',
-                path,
+                tuple(path) + (name,),
             )
             raise
 
     return result
+
+
+def _collect_entry(entry):
+    """The value of one widget-tree *entry* (see :func:`collect_values`)."""
+    # Nested model
+    if entry[0] == _MODEL_TAG:
+        return collect_values(entry[1])
+
+    # List of models
+    if entry[0] == _MODEL_LIST_TAG:
+        return entry[1].collect_all()
+
+    # List of scalars
+    if entry[0] == _SCALAR_LIST_TAG:
+        return entry[1].collect()
+
+    # Scalar field: entry is (spec, var)
+    spec, var = entry
+    raw = var.get()
+    gui_type = spec["gui_type"]
+
+    # Empty string on a nullable field -> None
+    if spec.get("nullable") and isinstance(raw, str) and (
+            raw.strip() == ""):
+        return None
+
+    if gui_type == "int":
+        if isinstance(raw, str) and raw.strip() == "":
+            return None
+        return int(raw)
+    if gui_type == "float":
+        if isinstance(raw, str) and raw.strip() == "":
+            return None
+        return float(raw)
+    if gui_type == "bool":
+        return bool(var.get())
+    return str(raw)
 
 
 def load_values(widgets, data):
@@ -842,8 +868,20 @@ class _ModelListSection:
         self._update_count()
 
     def collect_all(self):
-        """Return a list of plain dicts, one per entry."""
-        return [collect_values(wt) for _, wt in self._entries]
+        """Return a list of plain dicts, one per entry.
+
+        A bad value raises :class:`FieldValueError` with the entry's
+        number as shown in its header (``#2``) in the path.
+        """
+        result = []
+        for number, (_, tree) in enumerate(self._entries, start=1):
+            try:
+                result.append(collect_values(tree))
+            except FieldValueError as problem:
+                raise FieldValueError(
+                    (f"#{number}",) + problem.field_path,
+                    problem.problem) from problem.__cause__
+        return result
 
     def load_all(self, items: list[dict]):
         """Clear entries and recreate from *items*."""
@@ -966,6 +1004,61 @@ def setup_scrollable_canvas(parent):
     return canvas, inner
 
 
+#: How often (ms) a command window checks whether its call is done.
+_CALL_POLL_MS = 50
+
+
+def parse_timeout(text):
+    """The timeout in the window's box *text*, in seconds, or None.
+
+    0 (or an empty box) means no limit: wait until the command ends.
+    Fractions are kept.  Anything else, a negative number included,
+    raises ``ValueError``.
+    """
+    text = str(text).strip()
+    try:
+        seconds = float(text) if text else 0.0
+    except ValueError:
+        seconds = -1.0
+    if not seconds >= 0 or seconds == float('inf'):
+        raise ValueError(
+            f"the timeout {text!r} is not a number of seconds "
+            "(0 waits until the command ends).")
+    return seconds or None
+
+
+def run_callback(callback, instance):
+    """``callback(instance)``, or an ``ERROR: ...`` text if it raises.
+
+    The text goes to the command window's result pane, so an error
+    is seen there instead of only on the console; the traceback is
+    logged.
+    """
+    try:
+        return callback(instance)
+    except Exception as exc:  # pylint: disable=broad-except
+        LOGGER.exception('Problem in running callback %s', callback)
+        return f"ERROR: {type(exc).__name__}: {exc}"
+
+
+class LocalCall(threading.Thread):
+    """Run a command's callback in a worker thread.
+
+    Like :class:`SimpleRPCCall`, it leaves its outcome in
+    :attr:`result` (an ``ERROR: ...`` text if the callback raised;
+    see :func:`run_callback`).
+    """
+
+    def __init__(self, callback, instance):
+        super().__init__(daemon=True)
+        self.callback = callback
+        self.instance = instance
+        self.result = None
+
+    def run(self):
+        self.result = run_callback(self.callback, self.instance)
+
+
 class ModelCommandWindow(tk.Toplevel):
     """A pop-up window whose input fields are introspected from
     a Pydantic BaseModel.
@@ -978,6 +1071,8 @@ class ModelCommandWindow(tk.Toplevel):
 
     def __init__(self, master, *, command, url_var: tk.StringVar,
                  timeout_var: tk.IntVar, max_horizontal: int = 4):
+        # Set first: destroy() reads it, also after a failed __init__.
+        self._call_poll_id = None   # the pending check of a call
         super().__init__(master)
         self.command = command
         self.model_class = self.command.parameters[0]
@@ -1088,17 +1183,19 @@ class ModelCommandWindow(tk.Toplevel):
             return
 
         # Validate so the user sees Pydantic errors early
+        warning = ""
         try:
             self.model_class.model_validate(data)
         except ValidationError as exc:
-            self._show_result(f"VALIDATION WARNING:\n{exc}")
-            # Continue anyway – fill what we can
+            # Continue anyway – fill what we can, and keep the
+            # warning on screen below the "Loaded" line.
+            warning = f"\n\nVALIDATION WARNING:\n{exc}"
 
         try:
             load_values(self._widget_tree, data)
-            self._show_result(f"Loaded from {path}")
+            self._show_result(f"Loaded from {path}{warning}")
         except (ValueError, TypeError, KeyError) as exc:
-            self._show_result(f"LOAD ERROR: {exc}")
+            self._show_result(f"LOAD ERROR: {exc}{warning}")
 
     # -- Submit -------------------------------------------------
 
@@ -1117,8 +1214,12 @@ class ModelCommandWindow(tk.Toplevel):
             return
 
         if self.command.callback is not None:
-            result = self.command.callback(instance)
-            self._on_call_done(result)
+            if self.command.background:
+                self._start_call(LocalCall(self.command.callback,
+                                           instance))
+            else:
+                self._on_call_done(run_callback(self.command.callback,
+                                                instance))
             return
 
         url = self._server_config["url_var"].get().strip()
@@ -1126,19 +1227,62 @@ class ModelCommandWindow(tk.Toplevel):
             self._show_result("ERROR: Server URL is empty.")
             return
 
+        timeout_var = self._server_config["timeout_var"]
+        try:
+            timeout = parse_timeout(self.tk.globalgetvar(str(timeout_var)))
+        except ValueError as exc:
+            self._show_result(f"INPUT ERROR: {exc}")
+            return
+        # Send the values as entered (as the command line does), not
+        # a re-dump of the validated model: the server validates
+        # them itself.
+        self._start_call(SimpleRPCCall(
+            url=url, command_name=self.command.name,
+            cmd_args=json.dumps(raw_payload), single_try=True,
+            rpc_timeout=timeout))
+
+    def _start_call(self, call_thread):
+        """Start *call_thread* and check on it from the Tk thread.
+
+        Submit is disabled until it ends.  Its result is shown by
+        :meth:`_check_call`, which runs in the Tk thread: Tk must not
+        be used from the worker thread.
+        """
         self._submit_btn.config(state="disabled")
         self._status_label.config(text="Calling\u2026")
-
-        timeout = self._server_config["timeout_var"].get()
-        call_thread = SimpleRPCCall(
-            url=url, command_name=self.command.name, cmd_args=instance,
-            rpc_timeout=timeout)
-        call_thread.after = TimedCallback(
-            interval=0, function=self._on_call_done, args=[call_thread])
         call_thread.start()
+        self._call_poll_id = self.after(
+            _CALL_POLL_MS, self._check_call, call_thread)
+
+    def _check_call(self, call_thread):
+        """Show *call_thread*'s result once it ends; else check later.
+
+        Stops if the window is gone (destroyed without
+        :meth:`destroy`, e.g. from Tcl).
+        """
+        if not self.winfo_exists():
+            self._call_poll_id = None
+            return
+        if call_thread.is_alive():
+            self._call_poll_id = self.after(
+                _CALL_POLL_MS, self._check_call, call_thread)
+            return
+        self._call_poll_id = None
+        self._on_call_done(call_thread.result)
+
+    def destroy(self):
+        """Stop checking on a running call, then close the window.
+
+        The call itself is not stopped (an RPC command may still be
+        running on the server); its result is just not shown.
+        """
+        if getattr(self, '_call_poll_id', None) is not None:
+            self.after_cancel(self._call_poll_id)
+            self._call_poll_id = None
+        super().destroy()
 
     def _on_call_done(self, cmd_result):
-        """Handle the XML-RPC call completion."""
+        """Show a command's result and enable Submit again."""
         if not isinstance(cmd_result, str):
             cmd_result = str(
                 getattr(cmd_result, 'result', cmd_result),
@@ -1153,6 +1297,31 @@ class ModelCommandWindow(tk.Toplevel):
         self._result_text.delete("1.0", "end")
         self._result_text.insert("end", text)
         self._result_text.config(state="disabled")
+
+
+def command_groups(model_commands, other="Other"):
+    """*model_commands* ({key: Command}) split by ``Command.group``.
+
+    Returns {group: [(key, command), ...]}, the groups in the order
+    they first appear.  When no command has a group the only key is
+    ``None``; otherwise commands without a group are under *other*,
+    last (after any commands whose group is *other* itself).
+    """
+    groups = {}
+    ungrouped = []
+    for key, command in model_commands.items():
+        # getattr: command-like objects without a group still work.
+        group = getattr(command, 'group', None)
+        if group is None:
+            ungrouped.append((key, command))
+        else:
+            groups.setdefault(group, []).append((key, command))
+    if not groups:
+        return {None: ungrouped}
+    if ungrouped or other in groups:
+        # Last, together with any commands whose group is *other*.
+        groups[other] = groups.pop(other, []) + ungrouped
+    return groups
 
 
 class MainApp(tk.Tk):
@@ -1187,22 +1356,48 @@ class MainApp(tk.Tk):
         url_entry = ttk.Entry(url_frame, textvariable=self._url_var, width=50)
         url_entry.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
-        ttk.Label(url_frame, text="Timeout:").pack(side="left", padx=(6, 0))
+        ttk.Label(url_frame, text="Timeout (s, 0 = none):").pack(
+            side="left", padx=(6, 0))
 
-        self._timeout_var = tk.IntVar(value=20)
+        # 0: wait until the command ends.  A job on the server can run
+        # for much longer than any fixed limit, and a timeout only
+        # stops the wait (the command goes on on the server).
+        self._timeout_var = tk.IntVar(value=0)
         timeout_entry = ttk.Entry(url_frame, textvariable=self._timeout_var,
                                   width=5)
         timeout_entry.pack(side="left", padx=(6, 0))
 
-    def _build_command_buttons(self):
-        """Create a button for each available command."""
-        btn_frame = ttk.LabelFrame(self, text="Commands", padding=6)
-        btn_frame.pack(fill="both", expand=True,
-                       padx=10, pady=(4, 10))
+    #: The tab for commands without a group, when others have one.
+    OTHER_GROUP = "Other"
 
-        for cmd_key, info in self._model_commands.items():
+    def _build_command_buttons(self):
+        """Create a button for each available command.
+
+        Without any :attr:`Command.group` the buttons are one list.
+        With groups each group gets a tab, in the order the groups
+        first appear; commands without a group go on a last tab,
+        :attr:`OTHER_GROUP`.
+        """
+        groups = command_groups(self._model_commands, self.OTHER_GROUP)
+        if list(groups) == [None]:
+            btn_frame = ttk.LabelFrame(self, text="Commands", padding=6)
+            btn_frame.pack(fill="both", expand=True,
+                           padx=10, pady=(4, 10))
+            self._add_command_buttons(btn_frame, groups[None])
+            return
+        self._notebook = ttk.Notebook(self)
+        self._notebook.pack(fill="both", expand=True,
+                            padx=10, pady=(4, 10))
+        for group, commands in groups.items():
+            tab = ttk.Frame(self._notebook, padding=6)
+            self._notebook.add(tab, text=group)
+            self._add_command_buttons(tab, commands)
+
+    def _add_command_buttons(self, frame, commands):
+        """Add one button per (key, command) in *commands* to *frame*."""
+        for cmd_key, info in commands:
             LOGGER.debug('Preparing command for %s', cmd_key)
-            btn = ttk.Button(btn_frame, text=info.title,
+            btn = ttk.Button(frame, text=info.title,
                              command=lambda i=info: self._open_command(i))
             btn.pack(fill="x", pady=2)
             if info.parameters:
